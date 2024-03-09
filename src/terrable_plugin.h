@@ -23,6 +23,8 @@ protected:
 private:
     int getSimTime(fpreal t) { return evalInt("sim_time", 0, t); }
 
+    bool getTerrainLayer(GEO_PrimVolume** volume, const std::string& name);
+
     void increaseHeightfieldHeight(OP_Context& context);
 
 protected:

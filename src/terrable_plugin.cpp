@@ -61,6 +61,25 @@ unsigned SOP_Terrable::disableParms()
     return 0;
 }
 
+bool SOP_Terrable::getTerrainLayer(GEO_PrimVolume** volume, const std::string& name)
+{
+    GEO_Primitive* prim = gdp->findPrimitiveByName("height");
+
+    if (prim == nullptr || prim->getTypeId() != GEO_PRIMVOLUME)
+    {
+        return false;
+    }
+
+    *volume = static_cast<GEO_PrimVolume*>(prim);
+
+    if (volume == nullptr)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
 {
     if (!gdp || !gdp->hasVolumePrimitives())
@@ -68,9 +87,8 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
         return;
     }
 
-    GEO_Primitive* prim = gdp->findPrimitiveByName("height");
-
-    if (prim == nullptr || prim->getTypeId() != GEO_PRIMVOLUME)
+    GEO_PrimVolume* terrainVolHeight;
+    if (!getTerrainLayer(&terrainVolHeight, "height"))
     {
         return;
     }
@@ -79,10 +97,8 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
 
     int simTimeYears = getSimTime(now);
 
-    GEO_PrimVolume* volume = static_cast<GEO_PrimVolume*>(prim);
-
     UT_VoxelArrayIteratorF vit;
-    vit.setArray(volume->getVoxelWriteHandle().get());
+    vit.setArray(terrainVolHeight->getVoxelWriteHandle().get());
     for (vit.rewind(); !vit.atEnd(); vit.advance())
     {
         float currentValue = vit.getValue();
