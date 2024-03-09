@@ -17,7 +17,7 @@ using namespace HDK_Sample;
 
 //
 // newSopOperator is the hook that Houdini grabs from this dll
-// and invokes to register the SOP.  In this case we add ourselves
+// and invokes to register the SOP. In this case we add ourselves
 // to the specified operator table.
 //
 void newSopOperator(OP_OperatorTable* table)
@@ -35,72 +35,24 @@ void newSopOperator(OP_OperatorTable* table)
         )
     );
 }
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-//PUT YOUR CODE HERE
-//You need to declare your parameters here
-//Example to declare a variable for angle you can do like this:
-//static PRM_Name angleName("angle", "Angle");
+static PRM_Name simTimeName("sim_time", "Simulation Time (years)");
+static PRM_Default simTimeDefault(1);
+static PRM_Range simTimeRange(PRM_RANGE_RESTRICTED, 0, PRM_RANGE_UI, 100);
 
-
-
-
-
-
-
-
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//                     ^^^^^^^^    ^^^^^^^^^^^^^^^
-//                     internal    descriptive version
-
-
-// PUT YOUR CODE HERE
-// You need to setup the initial/default values for your parameters here
-// For example : If you are declaring the inital value for the angle parameter
-// static PRM_Default angleDefault(30.0);    
-
-
-
-
-
-
-
-
-
-
-
-////////////////////////////////////////////////////////////////////////////////////////
-
-PRM_Template
-SOP_Terrable::myTemplateList[] = {
-// PUT YOUR CODE HERE
-// You now need to fill this template with your parameter name and their default value
-// EXAMPLE : For the angle parameter this is how you should add into the template
-// PRM_Template(PRM_FLT, PRM_Template::PRM_EXPORT_MIN, 1, &angleName, &angleDefault, 0),
-// Similarly add all the other parameters in the template format here
-
-
-
-
-
-
-/////////////////////////////////////////////////////////////////////////////////////////////
-
+PRM_Template SOP_Terrable::myTemplateList[] = {
+    PRM_Template(PRM_INT, PRM_Template::PRM_EXPORT_MIN, 1, &simTimeName, &simTimeDefault, 0, &simTimeRange),
     PRM_Template()
 };
-
 
 // Here's how we define local variables for the SOP.
 enum {
     VAR_PT, // Point number of the star
-    VAR_NPT // Number of points in the star
 };
 
 CH_LocalVariable
 SOP_Terrable::myVariables[] = {
     { "PT", VAR_PT, 0 }, // The table provides a mapping
-    { "NPT", VAR_NPT, 0 }, // from text string to integer token
     { 0, 0, 0 }
 };
 
@@ -114,13 +66,10 @@ bool SOP_Terrable::evalVariableValue(fpreal &val, int index, int thread)
         // and cache values we are interested in.
         switch (index)
         {
-            case VAR_PT:
+        case VAR_PT:
             val = (fpreal) myCurrPoint;
             return true;
-            case VAR_NPT:
-            val = (fpreal) myTotalPoints;
-            return true;
-            default:
+        default:
             /* do nothing */;
         }
     }
@@ -150,130 +99,33 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context &context)
 {
     fpreal now = context.getTime();
 
-    // PUT YOUR CODE HERE
-    // Decare the necessary variables and get always keep getting the current value in the node
-    // For example to always get the current angle thats set in the node ,you need to :
-    //    float angle;
-    //    angle = ANGLE(now)       
-    //    NOTE : ANGLE is a function that you need to use and it is declared in the header file to update your values instantly while cooking 
-    LSystem myplant;
+    int simTimeYears = SIM_TIME(now);
 
-
-
-
-
-
-
-
-
-
-
-
-    ///////////////////////////////////////////////////////////////////////////
-
-    // PUT YOUR CODE HERE
-    // Next you need to call your Lystem cpp functions 
-    // Below is an example , you need to call the same functions based on the variables you declare
-    // myplant.loadProgramFromString("F\nF->F[+F]F[-F]");  
-    // myplant.setDefaultAngle(30.0f);
-    // myplant.setDefaultStep(1.0f);
-
-
-
-
-
-    ///////////////////////////////////////////////////////////////////////////////
-
-    // PUT YOUR CODE HERE
-    // You the need call the below function for all the genrations ,so that the end points points will be
-    // stored in the branches vector , you need to declare them first
-
-    //for (int i = 0; i < generations; i++)
-    //{
-    //    myplant.process(i, branches);
-    //}
-
-
-
-
-
-    ///////////////////////////////////////////////////////////////////////////////////
-
-
-    // Now that you have all the branches ,which is the start and end point of each point ,its time to render 
-    // these branches into Houdini 
-    
-
-    // PUT YOUR CODE HERE
-    // Declare all the necessary variables for drawing cylinders for each branch 
-    float rad, tx, ty, tz;
-    int divisions, plane;
-    int xcoord = 0, ycoord = 1, zcoord = 2;
-    float tmp;
-    UT_Vector4 pos;
-    GU_PrimPoly* poly;
-    int i;
     UT_Interrupt* boss;
 
     // Since we don't have inputs, we don't need to lock them.
-
-    divisions = 5; // We need twice our divisions of points
-    myTotalPoints = divisions; // Set the NPT local variable value
     myCurrPoint = 0; // Initialize the PT local variable
 
     // Check to see that there hasn't been a critical error in cooking the SOP.
     if (error() < UT_ERROR_ABORT)
     {
         boss = UTgetInterrupt();
-        if (divisions < 4)
-        {
-            // With the range restriction we have on the divisions, this
-            //    is actually impossible, but it shows how to add an error
-            //    message or warning to the SOP.
-            addWarning(SOP_MESSAGE, "Invalid divisions");
-            divisions = 4;
-        }
         gdp->clearAndDestroy();
 
-        // Start the interrupt server
         if (boss->opStart("Building LSYSTEM"))
         {
-            // PUT YOUR CODE HERE
-            // Build a polygon
-            // You need to build your cylinders inside Houdini from here
-            // TIPS:
-            // Use GU_PrimPoly poly = GU_PrimPoly::build(see what values it can take)
-            // Also use GA_Offset ptoff = poly->getPointOffset()
-            // and gdp->setPos3(ptoff,YOUR_POSITION_VECTOR) to build geometry.
+            // TODO: terrain stuff goes here
 
+            vec3 start = { 0, 0, 0 };
+            vec3 end = { 0, (double)simTimeYears, 0 };
 
+            GU_PrimPoly* poly = GU_PrimPoly::build(gdp, 2);
 
+            GA_Offset startPtoff = poly->getPointOffset(0);
+            GA_Offset endPtoff = poly->getPointOffset(1);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            gdp->setPos3(startPtoff, UT_Vector3(start[0], start[1], start[2]));
+            gdp->setPos3(endPtoff, UT_Vector3(end[0], end[1], end[2]));
 
             ////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -283,8 +135,6 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context &context)
             select(GU_SPrimitive);
         }
 
-        // Tell the interrupt server that we've completed. Must do this
-        // regardless of what opStart() returns.
         boss->opEnd();
     }
 
