@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(hlsystem CXX)
+project(terrable CXX)
 
 set(CMAKE_CONFIGURATION_TYPES "Release" CACHE STRING "Limited configurations" FORCE)
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Set the build type to Release by default" FORCE)
