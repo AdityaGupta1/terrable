@@ -26,19 +26,8 @@ include_directories(
     "."
 )
 
-set(SOURCE_FILES
-    src/LSystem.cpp
-    src/LSYSTEMPlugin.C
-    src/main.cpp
-    src/vec.cpp
-)
-
-set(HEADER_FILES
-    src/LSystem.h
-    src/LSYSTEMPlugin.h
-    src/matrix.h
-    src/vec.h
-)
+file(GLOB_RECURSE SOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+file(GLOB_RECURSE HEADER_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h" "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp")
 
 add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES} ${HEADER_FILES})
 
@@ -63,9 +52,11 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 
 set(CUSTOM_DSO_DIR $ENV{CUSTOM_DSO_PATH})
 
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+add_custom_target(copy_dll ALL
+    COMMAND ${CMAKE_COMMAND} -E echo "Copying ${PROJECT_NAME}.dll to ${CUSTOM_DSO_DIR} directory"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "$<TARGET_FILE:${PROJECT_NAME}>"
     "${CUSTOM_DSO_DIR}"
-    COMMENT "Copying ${PROJECT_NAME}.dll to CUSTOM_DSO_PATH directory"
 )
+
+add_dependencies(copy_dll ${PROJECT_NAME})
