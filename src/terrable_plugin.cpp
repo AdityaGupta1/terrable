@@ -70,13 +70,14 @@ bool SOP_Terrable::getTerrainLayer(GEO_PrimVolume** volume, const std::string& n
         return false;
     }
 
-    *volume = static_cast<GEO_PrimVolume*>(prim);
+    GEO_PrimVolume* primVolumePtr = static_cast<GEO_PrimVolume*>(prim);
 
-    if (volume == nullptr)
+    if (primVolumePtr == nullptr)
     {
         return false;
     }
 
+    *volume = primVolumePtr;
     return true;
 }
 
