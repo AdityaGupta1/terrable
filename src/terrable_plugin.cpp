@@ -45,12 +45,12 @@ PRM_Template SOP_Terrable::myTemplateList[] = {
     PRM_Template()
 };
 
-OP_Node* SOP_Terrable::myConstructor(OP_Network *net, const char *name, OP_Operator *op)
+OP_Node* SOP_Terrable::myConstructor(OP_Network* net, const char* name, OP_Operator* op)
 {
     return new SOP_Terrable(net, name, op);
 }
 
-SOP_Terrable::SOP_Terrable(OP_Network *net, const char *name, OP_Operator *op)
+SOP_Terrable::SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op)
     : SOP_Node(net, name, op)
 {}
 
@@ -70,7 +70,7 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
 
     GEO_Primitive* prim = gdp->findPrimitiveByName("height");
 
-    if (prim->getTypeId() != GEO_PRIMVOLUME)
+    if (prim == nullptr || prim->getTypeId() != GEO_PRIMVOLUME)
     {
         return;
     }
@@ -93,7 +93,7 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
     }
 }
 
-OP_ERROR SOP_Terrable::cookMySop(OP_Context &context)
+OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
 {
     OP_AutoLockInputs inputs(this);
     if (inputs.lock(context) >= UT_ERROR_ABORT)

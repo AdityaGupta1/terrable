@@ -15,7 +15,7 @@ public:
     static PRM_Template myTemplateList[];
 
 protected:
-    SOP_Terrable(OP_Network *net, const char *name, OP_Operator *op);
+    SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op);
     virtual ~SOP_Terrable();
 
     unsigned disableParms() override;
