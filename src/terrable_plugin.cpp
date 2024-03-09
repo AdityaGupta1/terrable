@@ -111,13 +111,22 @@ bool SOP_Terrable::readInputLayers()
 
     if (hasBedrock)
     {
-        // read existing layers and populate all others with 0
+        // read existing layers and populate all others with some default value (probably 0)
 
-        // TODO: read bedrock layer, set width/height, and resize vector accordingly
+        if (!readTerrainLayer(&primVolume, "bedrock"))
+        {
+            return false;
+        }
 
-        // TODO: read other layers
+        auto& writeHandle = primVolume->getVoxelWriteHandle();
+
+        width = writeHandle->getXRes();
+        height = writeHandle->getYRes();
+        resizeTerrainLayersVector();
+
+        // TODO: read all terrain layers (probably using do-while to use already read bedrock voxel array)
     }
-    else
+    else // hasHeight
     {
         // assume we want to populate layers from scratch using height as bedrock
 
@@ -132,18 +141,23 @@ bool SOP_Terrable::readInputLayers()
         height = writeHandle->getYRes();
         resizeTerrainLayersVector();
 
+        // set bedrock = input height and rock/sand = 0
         for (int y = 0; y < height; ++y)
         {
             for (int x = 0; x < width; ++x)
             {
-                terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)] = writeHandle->getValue(x, y, 0);
+                float bedrockHeight = writeHandle->getValue(x, y, 0);
+                terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)] = bedrockHeight;
+                terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] = bedrockHeight;
+                terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] = bedrockHeight;
+
+                // TODO: set humus based on approach at end of section 3.2 in paper
+                terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] = bedrockHeight;
             }
         }
 
-        // TODO: populate other layers based on slope or whatever
-
-        // TEMP: set layers other than bedrock to 0
-        for (int terrainLayerIdx = 1; terrainLayerIdx < numTerrainLayers; ++terrainLayerIdx)
+        // set moisture, vegetation, and dead vegetation = 0
+        for (int terrainLayerIdx = (int)TerrainLayer::MOISTURE; terrainLayerIdx <= (int)TerrainLayer::DEAD_VEGETATION; ++terrainLayerIdx)
         {
             for (int y = 0; y < height; ++y)
             {
@@ -162,8 +176,9 @@ bool SOP_Terrable::readInputLayers()
 bool SOP_Terrable::writeOutputLayers()
 {
     // TODO: output layers to heightfield and create new VolumePrims if necessary
+    //       also calculate combined height (bedrock + granular materials) and output that into default height layer
 
-    // TEMP: output bedrock layer directly to height
+    // TEMP: output bedrock directly to height
     GEO_PrimVolume* primVolume;
     if (!readTerrainLayer(&primVolume, "height"))
     {
@@ -180,6 +195,7 @@ bool SOP_Terrable::writeOutputLayers()
     }
 }
 
+// TEMP: used for basic testing
 void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
 {
     fpreal now = context.getTime();
