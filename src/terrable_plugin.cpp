@@ -20,24 +20,26 @@ using namespace HDK_Sample;
 // and invokes to register the SOP.  In this case we add ourselves
 // to the specified operator table.
 //
-void newSopOperator(OP_OperatorTable *table)
+void newSopOperator(OP_OperatorTable* table)
 {
     table->addOperator(
-        new OP_Operator("TerrableMain", // Internal name
-                "Terrable", // UI name
-                 SOP_Terrable::myConstructor, // How to build the SOP
-                 SOP_Terrable::myTemplateList, // My parameters
-                 0, // Min # of sources
-                 0, // Max # of sources
-                 SOP_Terrable::myVariables, // Local variables
-                 OP_FLAG_GENERATOR) // Flag it as generator
-        );
+        new OP_Operator(
+            "TerrableMain", // Internal name
+            "Terrable", // UI name
+            SOP_Terrable::myConstructor, // How to build the SOP
+            SOP_Terrable::myTemplateList, // My parameters
+            0, // Min # of sources
+            0, // Max # of sources
+            SOP_Terrable::myVariables, // Local variables
+            OP_FLAG_GENERATOR // Flag it as generator
+        )
+    );
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 //PUT YOUR CODE HERE
 //You need to declare your parameters here
-//Example to declare a variable for angle you can do like this :
+//Example to declare a variable for angle you can do like this:
 //static PRM_Name angleName("angle", "Angle");
 
 
