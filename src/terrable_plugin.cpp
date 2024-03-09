@@ -17,8 +17,15 @@
 #include <GEO/GEO_PrimVolume.h>
 
 #include <limits.h>
-#include "terrable_plugin.h"
-using namespace HDK_Sample;
+#include "terrable_plugin.hpp"
+
+using namespace Terrable;
+
+SOP_Terrable::SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op)
+    : SOP_Node(net, name, op), width(-1), height(-1)
+{}
+
+SOP_Terrable::~SOP_Terrable() {}
 
 void newSopOperator(OP_OperatorTable* table)
 {
@@ -50,18 +57,22 @@ OP_Node* SOP_Terrable::myConstructor(OP_Network* net, const char* name, OP_Opera
     return new SOP_Terrable(net, name, op);
 }
 
-SOP_Terrable::SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op)
-    : SOP_Node(net, name, op)
-{}
-
-SOP_Terrable::~SOP_Terrable() {}
-
 unsigned SOP_Terrable::disableParms()
 {
     return 0;
 }
 
-bool SOP_Terrable::getTerrainLayer(GEO_PrimVolume** volume, const std::string& name)
+size_t SOP_Terrable::posToIndex(int x, int y, TerrainLayer layer) const
+{
+    return ((int)layer * height * width) + (y * width) + x;
+}
+
+void SOP_Terrable::resizeTerrainLayersVector()
+{
+    terrainLayers.resize(numTerrainLayers * height * width);
+}
+
+bool SOP_Terrable::readTerrainLayer(GEO_PrimVolume** volume, const std::string& name)
 {
     GEO_Primitive* prim = gdp->findPrimitiveByName("height");
 
@@ -81,32 +92,106 @@ bool SOP_Terrable::getTerrainLayer(GEO_PrimVolume** volume, const std::string& n
     return true;
 }
 
-void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
+bool SOP_Terrable::readInputLayers()
 {
     if (!gdp || !gdp->hasVolumePrimitives())
     {
-        return;
+        return false;
     }
 
-    GEO_PrimVolume* terrainVolHeight;
-    if (!getTerrainLayer(&terrainVolHeight, "height"))
+    GEO_PrimVolume* primVolume;
+
+    bool hasBedrock = gdp->findPrimitiveByName("bedrock") != nullptr;
+    bool hasHeight = gdp->findPrimitiveByName("height") != nullptr;
+
+    if (!hasBedrock && !hasHeight)
     {
-        return;
+        return false;
     }
 
+    if (hasBedrock)
+    {
+        // read existing layers and populate all others with 0
+
+        // TODO: read bedrock layer, set width/height, and resize vector accordingly
+
+        // TODO: read other layers
+    }
+    else
+    {
+        // assume we want to populate layers from scratch using height as bedrock
+
+        if (!readTerrainLayer(&primVolume, "height"))
+        {
+            return false;
+        }
+
+        auto& writeHandle = primVolume->getVoxelWriteHandle();
+
+        width = writeHandle->getXRes();
+        height = writeHandle->getYRes();
+        resizeTerrainLayersVector();
+
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)] = writeHandle->getValue(x, y, 0);
+            }
+        }
+
+        // TODO: populate other layers based on slope or whatever
+
+        // TEMP: set layers other than bedrock to 0
+        for (int terrainLayerIdx = 1; terrainLayerIdx < numTerrainLayers; ++terrainLayerIdx)
+        {
+            for (int y = 0; y < height; ++y)
+            {
+                for (int x = 0; x < width; ++x)
+                {
+                    terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)] = 0.f;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+// for actual terrain layers (bedrock, sand, etc.), should this write height or thickness?
+bool SOP_Terrable::writeOutputLayers()
+{
+    // TODO: output layers to heightfield and create new VolumePrims if necessary
+
+    // TEMP: output bedrock layer directly to height
+    GEO_PrimVolume* primVolume;
+    if (!readTerrainLayer(&primVolume, "height"))
+    {
+        return false;
+    }
+
+    auto& writeHandle = primVolume->getVoxelWriteHandle();
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            writeHandle->setValue(x, y, 0, terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)]);
+        }
+    }
+}
+
+void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
+{
     fpreal now = context.getTime();
 
     int simTimeYears = getSimTime(now);
 
-    UT_VoxelArrayIteratorF vit;
-    vit.setArray(terrainVolHeight->getVoxelWriteHandle().get());
-    for (vit.rewind(); !vit.atEnd(); vit.advance())
+    for (int y = 0; y < height; ++y)
     {
-        float currentValue = vit.getValue();
-
-        float newValue = currentValue + simTimeYears;
-
-        vit.setValue(newValue);
+        for (int x = 0; x < width; ++x)
+        {
+            terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)] += simTimeYears;
+        }
     }
 }
 
@@ -120,7 +205,19 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
 
     duplicateSource(0, context); // duplicate input geometry
 
+    if (!readInputLayers())
+    {
+        addWarning(SOP_MESSAGE, "failed reading input layers");
+        return error();
+    }
+
     increaseHeightfieldHeight(context);
+
+    if (!writeOutputLayers())
+    {
+        addWarning(SOP_MESSAGE, "failed writing output layers");
+        return error();
+    }
 
     return error();
 }
