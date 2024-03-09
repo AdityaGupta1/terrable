@@ -20,10 +20,13 @@ protected:
 
     unsigned disableParms() override;
 
-    OP_ERROR cookMySop(OP_Context &context) override;
-
 private:
     int getSimTime(fpreal t) { return evalInt("sim_time", 0, t); }
+
+    void increaseHeightfieldHeight(OP_Context& context);
+
+protected:
+    OP_ERROR cookMySop(OP_Context& context) override;
 };
 
 } // End HDK_Sample namespace

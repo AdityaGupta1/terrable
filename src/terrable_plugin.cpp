@@ -1,15 +1,20 @@
 #include <UT/UT_DSOVersion.h>
-
 #include <UT/UT_Math.h>
 #include <UT/UT_Interrupt.h>
+
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimPoly.h>
+
 #include <CH/CH_LocalVariable.h>
+
 #include <PRM/PRM_Include.h>
 #include <PRM/PRM_SpareData.h>
+
 #include <OP/OP_Operator.h>
 #include <OP/OP_OperatorTable.h>
 #include <OP/OP_AutoLockInputs.h>
+
+#include <GEO/GEO_PrimVolume.h>
 
 #include <limits.h>
 #include "terrable_plugin.h"
@@ -56,6 +61,38 @@ unsigned SOP_Terrable::disableParms()
     return 0;
 }
 
+void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
+{
+    if (!gdp || !gdp->hasVolumePrimitives())
+    {
+        return;
+    }
+
+    GEO_Primitive* prim = gdp->findPrimitiveByName("height");
+
+    if (prim->getTypeId() != GEO_PRIMVOLUME)
+    {
+        return;
+    }
+
+    fpreal now = context.getTime();
+
+    int simTimeYears = getSimTime(now);
+
+    GEO_PrimVolume* volume = static_cast<GEO_PrimVolume*>(prim);
+
+    UT_VoxelArrayIteratorF vit;
+    vit.setArray(volume->getVoxelWriteHandle().get());
+    for (vit.rewind(); !vit.atEnd(); vit.advance())
+    {
+        float currentValue = vit.getValue();
+
+        float newValue = currentValue + simTimeYears;
+
+        vit.setValue(newValue);
+    }
+}
+
 OP_ERROR SOP_Terrable::cookMySop(OP_Context &context)
 {
     OP_AutoLockInputs inputs(this);
@@ -64,24 +101,9 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context &context)
         return error();
     }
 
-    fpreal now = context.getTime();
-
-    int simTimeYears = getSimTime(now);
-
     duplicateSource(0, context); // duplicate input geometry
 
-    fpreal frame = simTimeYears * 0.03;
-
-    GA_RWHandleV3 Phandle(gdp->findAttribute(GA_ATTRIB_POINT, "P"));
-    GA_Offset ptoff;
-    GA_FOR_ALL_PTOFF(gdp, ptoff)
-    {
-        UT_Vector3 Pvalue = Phandle.get(ptoff);
-        Pvalue.y() = sin(Pvalue.x() * .2 + Pvalue.z() * .3 + frame);
-        Phandle.set(ptoff, Pvalue);
-    }
-
-    Phandle.bumpDataId();
+    increaseHeightfieldHeight(context);
 
     return error();
 }
