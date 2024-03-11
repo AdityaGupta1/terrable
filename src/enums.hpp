@@ -46,4 +46,11 @@ namespace Terrable
         FIRE
     };
     static constexpr int numEvents = (int)Event::FIRE + 1;
+
+    static std::array<UT_Vector2i, 4> cardinalDirections = {
+        UT_Vector2i(1, 0),
+        UT_Vector2i(0, 1),
+        UT_Vector2i(-1, 0),
+        UT_Vector2i(0, -1)
+    };
 }

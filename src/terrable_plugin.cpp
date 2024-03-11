@@ -49,8 +49,13 @@ static PRM_Name simTimeName("sim_time", "Simulation Time (years)");
 static PRM_Default simTimeDefault(1);
 static PRM_Range simTimeRange(PRM_RANGE_RESTRICTED, 0, PRM_RANGE_UI, 100);
 
+static PRM_Name seedName("seed", "Random Seed");
+static PRM_Default seedDefault(0);
+static PRM_Range seedRange(PRM_RANGE_UI, 0, PRM_RANGE_UI, 100);
+
 PRM_Template SOP_Terrable::myTemplateList[] = {
     PRM_Template(PRM_INT, PRM_Template::PRM_EXPORT_MIN, 1, &simTimeName, &simTimeDefault, 0, &simTimeRange),
+    PRM_Template(PRM_INT, PRM_Template::PRM_EXPORT_MIN, 1, &seedName, &seedDefault, 0, &seedRange),
     PRM_Template()
 };
 
@@ -69,18 +74,39 @@ size_t SOP_Terrable::posToIndex(int x, int y, TerrainLayer layer) const
     return ((int)layer * height * width) + (y * width) + x;
 }
 
-// TODO: add parameter to allow considering layers below the given layer (calculate cumulative height for each point and calculate slope based on that)
-float SOP_Terrable::calculateSlope(int x, int y, TerrainLayer layer) const
+float SOP_Terrable::calculateElevation(int x, int y) const
 {
-    float hLeft = terrainLayers[posToIndex(std::max(x - 1, 0), y, layer)];
-    float hRight = terrainLayers[posToIndex(std::min(x + 1, width - 1), y, layer)];
-    float hDown = terrainLayers[posToIndex(x, std::max(y - 1, 0), layer)];
-    float hUp = terrainLayers[posToIndex(x, std::min(y + 1, height - 1), layer)];
+    float elevation = 0.f;
+    for (int terrainLayerIdx = (int)TerrainLayer::BEDROCK; terrainLayerIdx <= (int)TerrainLayer::HUMUS; ++terrainLayerIdx)
+    {
+        elevation += terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)];
+    }
+    return elevation;
+}
+
+float SOP_Terrable::calculateSlope(int x, int y) const
+{
+    float hLeft = calculateElevation(std::max(x - 1, 0), y);
+    float hRight = calculateElevation(std::min(x + 1, width - 1), y);
+    float hDown = calculateElevation(x, std::max(y - 1, 0));
+    float hUp = calculateElevation(x, std::min(y + 1, height - 1));
 
     float slopeX = (hRight - hLeft) / (2.f * xCellSize);
     float slopeY = (hUp - hDown) / (2.f * yCellSize);
 
     return sqrt(slopeX * slopeX + slopeY * slopeY);
+}
+
+float SOP_Terrable::calculateSlope(UT_Vector2i pos1, UT_Vector2i pos2) const
+{
+    float h1 = calculateElevation(pos1.x(), pos1.y());
+    float h2 = calculateElevation(pos2.x(), pos2.y());
+
+    float dx = pos1.x() - pos2.x();
+    float dy = pos1.y() - pos2.y();
+    float d = sqrtf(dx * dx + dy * dy);
+
+    return (h2 - h1) / d;
 }
 
 void SOP_Terrable::setTerrainSize(int newWidth, int newHeight)
@@ -213,7 +239,7 @@ bool SOP_Terrable::readInputLayers()
         {
             for (int x = 0; x < width; ++x)
             {
-                float bedrockSlope = calculateSlope(x, y, TerrainLayer::BEDROCK);
+                float bedrockSlope = calculateSlope(x, y);
                 float humusHeight = expf(-(bedrockSlope * bedrockSlope) / 0.480898346962988f);
                 terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] = humusHeight;
             }
@@ -322,39 +348,101 @@ bool SOP_Terrable::writeOutputLayers()
     }
 }
 
-// TEMP: used for basic testing
-void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
-{
-    fpreal now = context.getTime();
-
-    int simTimeYears = getSimTime(now);
-
-    for (int y = 0; y < height; ++y)
-    {
-        for (int x = 0; x < width; ++x)
-        {
-            UT_Vector3 noise;
-            UT_MxNoise::perlin(noise, { x * 0.01f, y * 0.01f });
-
-            terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] += simTimeYears * std::max(0.f, noise.x());
-            terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] += simTimeYears * std::max(0.f, noise.y());
-            terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] += simTimeYears * std::max(0.f, noise.z());
-        }
-    }
-}
-
 void SOP_Terrable::stepSimulation(OP_Context& context)
 {
     int numEventsToSimulate = width * height * numEvents;
     for (int i = 0; i < numEventsToSimulate; ++i)
     {
-
+        int x = SYSdrand48() * width;
+        int y = SYSdrand48() * height;
+        Event event = (Event)(SYSdrand48() * numEvents);
+        simulateEvent(context, x, y, event);
     }
 }
 
 void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
 {
+    switch (event)
+    {
+    case Event::RUNOFF:
+        simulateRunoffEvent(x, y);
+        break;
+    case Event::TEMPERATURE:
+        // TODO
+        break;
+    case Event::LIGHTNING:
+        simulateLightningEvent(x, y);
+        break;
+    case Event::GRAVITY:
+        // TODO
+        break;
+    case Event::FIRE:
+        // TODO
+        break;
+    }
+}
 
+void SOP_Terrable::simulateRunoffEvent(int x, int y)
+{
+    // TODO: calculate initial water amount
+
+    UT_Vector2i sourcePos = { x, y };
+
+    UT_Vector2i currentPos = sourcePos;
+    UT_Vector2i nextPos;
+    while (true)
+    {
+        std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
+        float totalSlope = 0.f;
+        for (const auto& cardinalDirection : cardinalDirections)
+        {
+            UT_Vector2i nextPosCandidate = currentPos + cardinalDirection;
+            if (nextPosCandidate.x() < 0 || nextPosCandidate.x() >= width || nextPosCandidate.y() < 0 || nextPosCandidate.y() >= height)
+            {
+                continue;
+            }
+
+            float slope = calculateSlope(currentPos, nextPosCandidate);
+            if (slope >= 0.f)
+            {
+                continue;
+            }
+
+            slope = -slope; // make it positive
+            nextPosCandidates.emplace_back(nextPosCandidate, slope);
+            totalSlope += slope;
+        }
+
+        if (totalSlope == 0.f) // reached terrain local minimum
+        {
+            // TODO: what happens to excess water?
+            break;
+        }
+
+        float rand = SYSdrand48() * totalSlope;
+        for (const auto& [nextPosCandidate, slope] : nextPosCandidates)
+        {
+            if (rand < slope)
+            {
+                nextPos = nextPosCandidate;
+                break;
+            }
+
+            rand -= slope;
+        }
+
+        // TEMP: testing
+        terrainLayers[posToIndex(currentPos.x(), currentPos.y(), TerrainLayer::BEDROCK)] -= 0.1f;
+        terrainLayers[posToIndex(nextPos.x(), nextPos.y(), TerrainLayer::BEDROCK)] += 0.1f;
+
+        // TODO: actual erosion
+        // probably scale sediment capacity by cell size?
+    }
+}
+
+void SOP_Terrable::simulateLightningEvent(int x, int y)
+{
+    // TODO
 }
 
 OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
@@ -365,30 +453,46 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
         return error();
     }
 
+    UT_Interrupt* boss = UTgetInterrupt();
+    if (!boss->opStart("running Terrable simulation"))
+    {
+        boss->opEnd();
+        return error();
+    }
+
     duplicateSource(0, context); // duplicate input geometry
 
     if (!readInputLayers())
     {
         addWarning(SOP_MESSAGE, "failed reading input layers");
+        boss->opEnd();
         return error();
     }
-
-    //increaseHeightfieldHeight(context);
 
     fpreal now = context.getTime();
 
     int simTimeYears = getSimTime(now);
+    int seed = getSeed(now);
+
+    SYSsrand48(seed);
 
     for (int step = 0; step < simTimeYears; ++step)
     {
+        if (boss->opInterrupt((int)((step * 100.f) / simTimeYears)))
+        {
+            break;
+        }
+
         stepSimulation(context);
     }
 
     if (!writeOutputLayers())
     {
         addWarning(SOP_MESSAGE, "failed writing output layers");
+        boss->opEnd();
         return error();
     }
 
+    boss->opEnd();
     return error();
 }
