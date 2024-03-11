@@ -311,13 +311,7 @@ bool SOP_Terrable::writeOutputLayers()
     {
         for (int x = 0; x < width; ++x)
         {
-            float height = 0.f;
-            for (int terrainLayerIdx = (int)TerrainLayer::BEDROCK; terrainLayerIdx <= (int)TerrainLayer::HUMUS; ++terrainLayerIdx)
-            {
-                height += terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)];
-            }
-
-            heightWriteHandle->setValue(x, y, 0, height);
+            heightWriteHandle->setValue(x, y, 0, calculateElevation(x, y));
         }
     }
 
