@@ -247,7 +247,7 @@ bool SOP_Terrable::writeOutputLayers()
         return false;
     }
 
-    // set individual layer values, creating layers that are not present
+    // set individual layer values, creating layers if necessary
     for (int terrainLayerIdx = 0; terrainLayerIdx < numTerrainLayers; ++terrainLayerIdx)
     {
         const auto& layerName = terrainLayerNames[terrainLayerIdx];
@@ -290,9 +290,16 @@ bool SOP_Terrable::writeOutputLayers()
         {
             for (int x = 0; x < width; ++x)
             {
-                float rockThickness = terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] * 0.02f;
-                float sandThickness = terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] * 0.02f;
-                colorWriteHandle->setValue(x, y, 0, i == 0 ? rockThickness : (i == 1 ? sandThickness : 0.f));
+                for (int terrainLayerIdx = (int)TerrainLayer::HUMUS; terrainLayerIdx >= (int)TerrainLayer::BEDROCK; --terrainLayerIdx)
+                {
+                    TerrainLayer terrainLayer = (TerrainLayer)terrainLayerIdx;
+                    if (terrainLayers[posToIndex(x, y, terrainLayer)] > 0.f || terrainLayer == TerrainLayer::BEDROCK)
+                    {
+                        const auto& col = terrainLayerColors[terrainLayerIdx];
+                        colorWriteHandle->setValue(x, y, 0, col[i]);
+                        break;
+                    }
+                }
             }
         }
     }
@@ -312,8 +319,9 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
             UT_Vector3 noise;
             UT_MxNoise::perlin(noise, { x * 0.01f, y * 0.01f });
 
-            terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] += simTimeYears * (0.5f + 0.5f * noise.x());
-            terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] += simTimeYears * (0.5f + 0.5f * noise.y());
+            terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] += simTimeYears * std::max(0.f, noise.x());
+            terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] += simTimeYears * std::max(0.f, noise.y());
+            terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] += simTimeYears * std::max(0.f, noise.z());
         }
     }
 }
