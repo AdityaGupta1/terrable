@@ -145,9 +145,7 @@ bool SOP_Terrable::readInputLayers()
                 {
                     for (int x = 0; x < width; ++x)
                     {
-                        // bedrock layer must exist so there should be no issues with negative indices
-                        terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)] =
-                            (terrainLayerIdx < numStackedTerrainLayers) ? terrainLayers[posToIndex(x, y, (TerrainLayer)(terrainLayerIdx - 1))] : 0;
+                        terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)] = 0.f;
                     }
                 }
             }
@@ -168,28 +166,39 @@ bool SOP_Terrable::readInputLayers()
         height = writeHandle->getYRes();
         resizeTerrainLayersVector();
 
-        // set bedrock = input height and rock/sand = 0
+        // set bedrock = input height
         for (int y = 0; y < height; ++y)
         {
             for (int x = 0; x < width; ++x)
             {
                 float bedrockHeight = writeHandle->getValue(x, y, 0);
                 terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)] = bedrockHeight;
-                terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] = bedrockHeight;
-                terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] = bedrockHeight;
             }
         }
 
+        // set rock and sand = 0
+        for (int terrainLayerIdx = (int)TerrainLayer::ROCK; terrainLayerIdx <= (int)TerrainLayer::SAND; ++terrainLayerIdx)
+        {
+            for (int y = 0; y < height; ++y)
+            {
+                for (int x = 0; x < width; ++x)
+                {
+                    terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)] = 0.f;
+                }
+            }
+        }
+
+        // set humus based on bedrock slope
         for (int y = 0; y < height; ++y)
         {
             for (int x = 0; x < width; ++x)
             {
-                float sandHeight = terrainLayers[posToIndex(x, y, TerrainLayer::SAND)];
+                float bedrockHeight = terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)];
 
                 // TODO: set humus based on approach at end of section 3.2 in paper
                 float humusHeight = 0.f;
 
-                terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] = sandHeight + humusHeight;
+                terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] = humusHeight;
             }
         }
 
@@ -255,7 +264,13 @@ bool SOP_Terrable::writeOutputLayers()
     {
         for (int x = 0; x < width; ++x)
         {
-            heightWriteHandle->setValue(x, y, 0, terrainLayers[posToIndex(x, y, (TerrainLayer)(numStackedTerrainLayers - 1))]); // write height of top stacked layer to "height"
+            float height = 0.f;
+            for (int terrainLayerIdx = (int)TerrainLayer::BEDROCK; terrainLayerIdx <= (int)TerrainLayer::HUMUS; ++terrainLayerIdx)
+            {
+                height += terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)];
+            }
+
+            heightWriteHandle->setValue(x, y, 0, height);
         }
     }
 }
@@ -271,7 +286,8 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
     {
         for (int x = 0; x < width; ++x)
         {
-            terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] += simTimeYears * ((float)x / width) * ((float)y / width);
+            terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] += simTimeYears * ((float)x / width);
+            terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] += simTimeYears * ((float)y / height);
         }
     }
 }
