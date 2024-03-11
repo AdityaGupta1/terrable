@@ -1,11 +1,9 @@
-#ifndef LSystem_H_
-#define LSystem_H_
+#pragma once
 
 #include <string>
 #include <vector>
 #include <map>
 #include "vec.h"
-
 
 class LSystem
 {
@@ -68,5 +66,3 @@ protected:
         vec3 left;
     };
 };
-
-#endif

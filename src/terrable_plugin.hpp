@@ -1,5 +1,4 @@
-#ifndef __LSYSTEM_PLUGIN_h__
-#define __LSYSTEM_PLUGIN_h__
+#pragma once
 
 #include <vector>
 
@@ -46,5 +45,3 @@ protected:
 };
 
 } // namespace Terrable
-
-#endif

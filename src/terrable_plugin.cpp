@@ -4,6 +4,7 @@
 
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimPoly.h>
+#include <GU/GU_PrimVolume.h>
 
 #include <CH/CH_LocalVariable.h>
 
@@ -14,7 +15,6 @@
 #include <OP/OP_OperatorTable.h>
 #include <OP/OP_AutoLockInputs.h>
 
-#include <GEO/GEO_PrimVolume.h>
 
 #include <limits.h>
 #include "terrable_plugin.hpp"
@@ -74,7 +74,7 @@ void SOP_Terrable::resizeTerrainLayersVector()
 
 bool SOP_Terrable::readTerrainLayer(GEO_PrimVolume** volume, const std::string& name)
 {
-    GEO_Primitive* prim = gdp->findPrimitiveByName("height");
+    GEO_Primitive* prim = gdp->findPrimitiveByName(name.c_str());
 
     if (prim == nullptr || prim->getTypeId() != GEO_PRIMVOLUME)
     {
@@ -111,20 +111,47 @@ bool SOP_Terrable::readInputLayers()
 
     if (hasBedrock)
     {
-        // read existing layers and populate all others with some default value (probably 0)
+        // read existing layers and populate nonexistent layers with default values
 
         if (!readTerrainLayer(&primVolume, "bedrock"))
         {
             return false;
         }
 
-        auto& writeHandle = primVolume->getVoxelWriteHandle();
+        auto& bedrockWriteHandle = primVolume->getVoxelWriteHandle();
 
-        width = writeHandle->getXRes();
-        height = writeHandle->getYRes();
+        width = bedrockWriteHandle->getXRes();
+        height = bedrockWriteHandle->getYRes();
         resizeTerrainLayersVector();
 
-        // TODO: read all terrain layers (probably using do-while to use already read bedrock voxel array)
+        for (int terrainLayerIdx = 0; terrainLayerIdx < numTerrainLayers; ++terrainLayerIdx)
+        {
+            if (readTerrainLayer(&primVolume, terrainLayerNames[terrainLayerIdx]))
+            {
+                auto& layerWriteHandle = primVolume->getVoxelWriteHandle();
+
+                for (int y = 0; y < height; ++y)
+                {
+                    for (int x = 0; x < width; ++x)
+                    {
+                        float layerValue = layerWriteHandle->getValue(x, y, 0);
+                        terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)] = layerValue;
+                    }
+                }
+            }
+            else
+            {
+                for (int y = 0; y < height; ++y)
+                {
+                    for (int x = 0; x < width; ++x)
+                    {
+                        // bedrock layer must exist so there should be no issues with negative indices
+                        terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)] =
+                            (terrainLayerIdx < numStackedTerrainLayers) ? terrainLayers[posToIndex(x, y, (TerrainLayer)(terrainLayerIdx - 1))] : 0;
+                    }
+                }
+            }
+        }
     }
     else // hasHeight
     {
@@ -150,9 +177,19 @@ bool SOP_Terrable::readInputLayers()
                 terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)] = bedrockHeight;
                 terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] = bedrockHeight;
                 terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] = bedrockHeight;
+            }
+        }
+
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                float sandHeight = terrainLayers[posToIndex(x, y, TerrainLayer::SAND)];
 
                 // TODO: set humus based on approach at end of section 3.2 in paper
-                terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] = bedrockHeight;
+                float humusHeight = 0.f;
+
+                terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] = sandHeight + humusHeight;
             }
         }
 
@@ -172,25 +209,51 @@ bool SOP_Terrable::readInputLayers()
     return true;
 }
 
-// for actual terrain layers (bedrock, sand, etc.), should this write height or thickness?
 bool SOP_Terrable::writeOutputLayers()
 {
-    // TODO: output layers to heightfield and create new VolumePrims if necessary
-    //       also calculate combined height (bedrock + granular materials) and output that into default height layer
-
-    // TEMP: output bedrock directly to height
     GEO_PrimVolume* primVolume;
+
+    for (int terrainLayerIdx = 0; terrainLayerIdx < numTerrainLayers; ++terrainLayerIdx)
+    {
+        const auto& layerName = terrainLayerNames[terrainLayerIdx];
+        if (!readTerrainLayer(&primVolume, layerName))
+        {
+            UT_VoxelArrayF voxelArray;
+            voxelArray.size(width, height, 1);
+
+            primVolume = GU_PrimVolume::build(gdp);
+            primVolume->setVoxels(&voxelArray);
+
+            GA_RWHandleS nameAttribHandle(gdp->addStringTuple(GA_ATTRIB_PRIMITIVE, "name", 1));
+            if (nameAttribHandle.isValid())
+            {
+                nameAttribHandle.set(primVolume->getMapOffset(), terrainLayerNames[terrainLayerIdx]);
+            }
+        }
+
+        auto& layerWriteHandle = primVolume->getVoxelWriteHandle();
+
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                layerWriteHandle->setValue(x, y, 0, terrainLayers[posToIndex(x, y, (TerrainLayer)(terrainLayerIdx))]);
+            }
+        }
+    }
+
     if (!readTerrainLayer(&primVolume, "height"))
     {
         return false;
     }
 
-    auto& writeHandle = primVolume->getVoxelWriteHandle();
+    auto& heightWriteHandle = primVolume->getVoxelWriteHandle();
     for (int y = 0; y < height; ++y)
     {
         for (int x = 0; x < width; ++x)
         {
-            writeHandle->setValue(x, y, 0, terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)]);
+            //heightWriteHandle->setValue(x, y, 0, terrainLayers[posToIndex(x, y, (TerrainLayer)(numStackedTerrainLayers - 1))]); // write height of top stacked layer to "height"
+            heightWriteHandle->setValue(x, y, 0, terrainLayers[posToIndex(x, y, TerrainLayer::MOISTURE)]); // TEMP: used for testnig
         }
     }
 }
@@ -206,7 +269,8 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
     {
         for (int x = 0; x < width; ++x)
         {
-            terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)] += simTimeYears;
+            // TEMP: outputting moisture for testing
+            terrainLayers[posToIndex(x, y, TerrainLayer::MOISTURE)] += simTimeYears;
         }
     }
 }
