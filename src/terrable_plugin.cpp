@@ -72,9 +72,9 @@ void SOP_Terrable::resizeTerrainLayersVector()
     terrainLayers.resize(numTerrainLayers * height * width);
 }
 
-bool SOP_Terrable::readTerrainLayer(GEO_PrimVolume** volume, const std::string& name)
+bool SOP_Terrable::readTerrainLayer(GEO_PrimVolume** volume, const std::string& layerName)
 {
-    GEO_Primitive* prim = gdp->findPrimitiveByName(name.c_str());
+    GEO_Primitive* prim = gdp->findPrimitiveByName(layerName.c_str());
 
     if (prim == nullptr || prim->getTypeId() != GEO_PRIMVOLUME)
     {
@@ -218,43 +218,40 @@ bool SOP_Terrable::readInputLayers()
     return true;
 }
 
-bool SOP_Terrable::writeOutputLayers()
+UT_VoxelArrayWriteHandleF SOP_Terrable::createOrReadLayerAndGetWriteHandle(const std::string& layerName, const GEO_PrimVolume* heightPrim)
 {
     GEO_PrimVolume* primVolume;
 
-    if (!readTerrainLayer(&primVolume, "height"))
+    if (!readTerrainLayer(&primVolume, layerName))
+    {
+        UT_VoxelArrayF voxelArray;
+        voxelArray.size(width, height, 1);
+
+        primVolume = GU_PrimVolume::build(gdp);
+        primVolume->setVoxels(&voxelArray);
+
+        primVolume->setTransform(heightPrim->getTransform());
+
+        GA_RWHandleS nameAttribHandle(gdp->addStringTuple(GA_ATTRIB_PRIMITIVE, "name", 1));
+        nameAttribHandle.set(primVolume->getMapOffset(), layerName);
+    }
+
+    return primVolume->getVoxelWriteHandle();
+}
+
+bool SOP_Terrable::writeOutputLayers()
+{
+    GEO_PrimVolume* heightPrim;
+    if (!readTerrainLayer(&heightPrim, "height"))
     {
         return false;
     }
-
-    GEO_PrimVolume* heightPrim = primVolume;
-
-    auto& heightWriteHandle = primVolume->getVoxelWriteHandle();
 
     // set individual layer values, creating layers that are not present
     for (int terrainLayerIdx = 0; terrainLayerIdx < numTerrainLayers; ++terrainLayerIdx)
     {
         const auto& layerName = terrainLayerNames[terrainLayerIdx];
-        if (!readTerrainLayer(&primVolume, layerName))
-        {
-            UT_VoxelArrayF voxelArray;
-            voxelArray.size(width, height, 1);
-
-            primVolume = GU_PrimVolume::build(gdp);
-            primVolume->setVoxels(&voxelArray);
-
-            primVolume->setTransform(heightPrim->getTransform());
-
-            GA_RWHandleS nameAttribHandle(gdp->addStringTuple(GA_ATTRIB_PRIMITIVE, "name", 1));
-            if (!nameAttribHandle.isValid())
-            {
-                return false;
-            }
-
-            nameAttribHandle.set(primVolume->getMapOffset(), terrainLayerNames[terrainLayerIdx]);
-        }
-
-        auto& layerWriteHandle = primVolume->getVoxelWriteHandle();
+        auto& layerWriteHandle = createOrReadLayerAndGetWriteHandle(layerName, heightPrim);
 
         for (int y = 0; y < height; ++y)
         {
@@ -266,6 +263,7 @@ bool SOP_Terrable::writeOutputLayers()
     }
 
     // set height (combined height of bedrock and granular materials)
+    auto& heightWriteHandle = heightPrim->getVoxelWriteHandle();
     for (int y = 0; y < height; ++y)
     {
         for (int x = 0; x < width; ++x)
@@ -282,32 +280,11 @@ bool SOP_Terrable::writeOutputLayers()
 
     // set color
     const std::string suffixes[] = {"x", "y", "z"};
-
     for (int i = 0; i < 3; ++i)
     {
         const auto& suffix = suffixes[i];
         const std::string colorLayerName = "color." + suffix;
-
-        if (!readTerrainLayer(&primVolume, colorLayerName))
-        {
-            UT_VoxelArrayF voxelArray;
-            voxelArray.size(width, height, 1);
-
-            primVolume->setTransform(heightPrim->getTransform());
-
-            primVolume = GU_PrimVolume::build(gdp);
-            primVolume->setVoxels(&voxelArray);
-
-            GA_RWHandleS nameAttribHandle(gdp->addStringTuple(GA_ATTRIB_PRIMITIVE, "name", 1));
-            if (!nameAttribHandle.isValid())
-            {
-                return false;
-            }
-
-            nameAttribHandle.set(primVolume->getMapOffset(), colorLayerName);
-        }
-
-        auto& colorWriteHandle = primVolume->getVoxelWriteHandle();
+        auto& colorWriteHandle = createOrReadLayerAndGetWriteHandle(colorLayerName, heightPrim);
 
         for (int y = 0; y < height; ++y)
         {

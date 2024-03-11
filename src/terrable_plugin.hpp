@@ -34,8 +34,10 @@ private:
     size_t posToIndex(int x, int y, TerrainLayer layer) const;
 
     void resizeTerrainLayersVector();
-    bool readTerrainLayer(GEO_PrimVolume** volume, const std::string& name);
+    bool readTerrainLayer(GEO_PrimVolume** volume, const std::string& layerName);
     bool readInputLayers();
+
+    UT_VoxelArrayWriteHandleF createOrReadLayerAndGetWriteHandle(const std::string& layerName, const GEO_PrimVolume* heightPrim);
     bool writeOutputLayers();
 
     // TEMP: used for basic testing
