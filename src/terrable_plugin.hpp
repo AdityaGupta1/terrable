@@ -38,6 +38,7 @@ private:
     bool readInputLayers();
     bool writeOutputLayers();
 
+    // TEMP: used for basic testing
     void increaseHeightfieldHeight(OP_Context& context);
 
 protected:

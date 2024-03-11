@@ -213,22 +213,31 @@ bool SOP_Terrable::writeOutputLayers()
 {
     GEO_PrimVolume* primVolume;
 
+    if (!readTerrainLayer(&primVolume, "height"))
+    {
+        return false;
+    }
+
+    auto& heightWriteHandle = primVolume->getVoxelWriteHandle();
+
     for (int terrainLayerIdx = 0; terrainLayerIdx < numTerrainLayers; ++terrainLayerIdx)
     {
         const auto& layerName = terrainLayerNames[terrainLayerIdx];
         if (!readTerrainLayer(&primVolume, layerName))
         {
             UT_VoxelArrayF voxelArray;
-            voxelArray.size(width, height, 1);
+            voxelArray.size(heightWriteHandle->getXRes(), heightWriteHandle->getYRes(), heightWriteHandle->getZRes()); // TODO: shows wrong voxel size in node info panel
 
             primVolume = GU_PrimVolume::build(gdp);
             primVolume->setVoxels(&voxelArray);
 
             GA_RWHandleS nameAttribHandle(gdp->addStringTuple(GA_ATTRIB_PRIMITIVE, "name", 1));
-            if (nameAttribHandle.isValid())
+            if (!nameAttribHandle.isValid())
             {
-                nameAttribHandle.set(primVolume->getMapOffset(), terrainLayerNames[terrainLayerIdx]);
+                return false;
             }
+
+            nameAttribHandle.set(primVolume->getMapOffset(), terrainLayerNames[terrainLayerIdx]);
         }
 
         auto& layerWriteHandle = primVolume->getVoxelWriteHandle();
@@ -242,18 +251,11 @@ bool SOP_Terrable::writeOutputLayers()
         }
     }
 
-    if (!readTerrainLayer(&primVolume, "height"))
-    {
-        return false;
-    }
-
-    auto& heightWriteHandle = primVolume->getVoxelWriteHandle();
     for (int y = 0; y < height; ++y)
     {
         for (int x = 0; x < width; ++x)
         {
-            //heightWriteHandle->setValue(x, y, 0, terrainLayers[posToIndex(x, y, (TerrainLayer)(numStackedTerrainLayers - 1))]); // write height of top stacked layer to "height"
-            heightWriteHandle->setValue(x, y, 0, terrainLayers[posToIndex(x, y, TerrainLayer::MOISTURE)]); // TEMP: used for testnig
+            heightWriteHandle->setValue(x, y, 0, terrainLayers[posToIndex(x, y, (TerrainLayer)(numStackedTerrainLayers - 1))]); // write height of top stacked layer to "height"
         }
     }
 }
@@ -269,8 +271,7 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
     {
         for (int x = 0; x < width; ++x)
         {
-            // TEMP: outputting moisture for testing
-            terrainLayers[posToIndex(x, y, TerrainLayer::MOISTURE)] += simTimeYears;
+            terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] += simTimeYears * ((float)x / width) * ((float)y / width);
         }
     }
 }
