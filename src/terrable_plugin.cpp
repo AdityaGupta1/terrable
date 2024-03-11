@@ -24,7 +24,7 @@ using namespace Terrable;
 constexpr float layerColorThreshold = 0.05f;
 
 SOP_Terrable::SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op)
-    : SOP_Node(net, name, op), width(-1), height(-1)
+    : SOP_Node(net, name, op), width(-1), height(-1), xCellSize(0), yCellSize(0)
 {}
 
 SOP_Terrable::~SOP_Terrable() {}
