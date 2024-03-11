@@ -16,6 +16,10 @@ private:
     int height;
     std::vector<float> terrainLayers;
 
+    UT_BoundingBox bbox;
+    float xCellSize;
+    float yCellSize;
+
 protected:
     SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op);
     virtual ~SOP_Terrable();
@@ -33,7 +37,10 @@ private:
 
     size_t posToIndex(int x, int y, TerrainLayer layer) const;
 
-    void resizeTerrainLayersVector();
+    float calculateSlope(int x, int y, TerrainLayer layer) const;
+
+    void setTerrainSize(int newWidth, int newHeight);
+
     bool readTerrainLayer(GEO_PrimVolume** volume, const std::string& layerName);
     bool readInputLayers();
 
@@ -42,6 +49,9 @@ private:
 
     // TEMP: used for basic testing
     void increaseHeightfieldHeight(OP_Context& context);
+
+    void stepSimulation(OP_Context& context);
+    void simulateEvent(OP_Context& context, int x, int y, Event event);
 
 protected:
     OP_ERROR cookMySop(OP_Context& context) override;

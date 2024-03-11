@@ -21,6 +21,8 @@
 
 using namespace Terrable;
 
+constexpr float layerColorThreshold = 0.05f;
+
 SOP_Terrable::SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op)
     : SOP_Node(net, name, op), width(-1), height(-1)
 {}
@@ -67,9 +69,31 @@ size_t SOP_Terrable::posToIndex(int x, int y, TerrainLayer layer) const
     return ((int)layer * height * width) + (y * width) + x;
 }
 
-void SOP_Terrable::resizeTerrainLayersVector()
+// TODO: add parameter to allow considering layers below the given layer (calculate cumulative height for each point and calculate slope based on that)
+float SOP_Terrable::calculateSlope(int x, int y, TerrainLayer layer) const
 {
-    terrainLayers.resize(numTerrainLayers * height * width);
+    float hLeft = terrainLayers[posToIndex(std::max(x - 1, 0), y, layer)];
+    float hRight = terrainLayers[posToIndex(std::min(x + 1, width - 1), y, layer)];
+    float hDown = terrainLayers[posToIndex(x, std::max(y - 1, 0), layer)];
+    float hUp = terrainLayers[posToIndex(x, std::min(y + 1, height - 1), layer)];
+
+    float slopeX = (hRight - hLeft) / (2.f * xCellSize);
+    float slopeY = (hUp - hDown) / (2.f * yCellSize);
+
+    return sqrt(slopeX * slopeX + slopeY * slopeY);
+}
+
+void SOP_Terrable::setTerrainSize(int newWidth, int newHeight)
+{
+    width = newWidth;
+    height = newHeight;
+    terrainLayers.resize(numTerrainLayers * width * height);
+
+    UT_Matrix4R xform;
+    xform.identity();
+    gdp->getBBox(bbox, xform); // not sure if providing identity matrix here does anything
+    xCellSize = bbox.sizeX() / width;
+    yCellSize = bbox.sizeY() / height;
 }
 
 bool SOP_Terrable::readTerrainLayer(GEO_PrimVolume** volume, const std::string& layerName)
@@ -120,9 +144,7 @@ bool SOP_Terrable::readInputLayers()
 
         auto& bedrockWriteHandle = primVolume->getVoxelWriteHandle();
 
-        width = bedrockWriteHandle->getXRes();
-        height = bedrockWriteHandle->getYRes();
-        resizeTerrainLayersVector();
+        setTerrainSize(bedrockWriteHandle->getXRes(), bedrockWriteHandle->getYRes());
 
         for (int terrainLayerIdx = 0; terrainLayerIdx < numTerrainLayers; ++terrainLayerIdx)
         {
@@ -162,9 +184,7 @@ bool SOP_Terrable::readInputLayers()
 
         auto& writeHandle = primVolume->getVoxelWriteHandle();
 
-        width = writeHandle->getXRes();
-        height = writeHandle->getYRes();
-        resizeTerrainLayersVector();
+        setTerrainSize(writeHandle->getXRes(), writeHandle->getYRes());
 
         // set bedrock = input height
         for (int y = 0; y < height; ++y)
@@ -193,11 +213,8 @@ bool SOP_Terrable::readInputLayers()
         {
             for (int x = 0; x < width; ++x)
             {
-                float bedrockHeight = terrainLayers[posToIndex(x, y, TerrainLayer::BEDROCK)];
-
-                // TODO: set humus based on approach at end of section 3.2 in paper
-                float humusHeight = 0.f;
-
+                float bedrockSlope = calculateSlope(x, y, TerrainLayer::BEDROCK);
+                float humusHeight = expf(-(bedrockSlope * bedrockSlope) / 0.480898346962988f);
                 terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] = humusHeight;
             }
         }
@@ -293,7 +310,7 @@ bool SOP_Terrable::writeOutputLayers()
                 for (int terrainLayerIdx = (int)TerrainLayer::HUMUS; terrainLayerIdx >= (int)TerrainLayer::BEDROCK; --terrainLayerIdx)
                 {
                     TerrainLayer terrainLayer = (TerrainLayer)terrainLayerIdx;
-                    if (terrainLayers[posToIndex(x, y, terrainLayer)] > 0.f || terrainLayer == TerrainLayer::BEDROCK)
+                    if (terrainLayers[posToIndex(x, y, terrainLayer)] > layerColorThreshold || terrainLayer == TerrainLayer::BEDROCK)
                     {
                         const auto& col = terrainLayerColors[terrainLayerIdx];
                         colorWriteHandle->setValue(x, y, 0, col[i]);
@@ -326,6 +343,20 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
     }
 }
 
+void SOP_Terrable::stepSimulation(OP_Context& context)
+{
+    int numEventsToSimulate = width * height * numEvents;
+    for (int i = 0; i < numEventsToSimulate; ++i)
+    {
+
+    }
+}
+
+void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
+{
+
+}
+
 OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
 {
     OP_AutoLockInputs inputs(this);
@@ -342,7 +373,16 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
         return error();
     }
 
-    increaseHeightfieldHeight(context);
+    //increaseHeightfieldHeight(context);
+
+    fpreal now = context.getTime();
+
+    int simTimeYears = getSimTime(now);
+
+    for (int step = 0; step < simTimeYears; ++step)
+    {
+        stepSimulation(context);
+    }
 
     if (!writeOutputLayers())
     {

@@ -36,4 +36,14 @@ namespace Terrable
         UT_Vector3(1.f, 0.f, 1.f), // vegetation
         UT_Vector3(1.f, 0.f, 1.f), // dead_vegetation
     };
+
+    enum class Event
+    {
+        RUNOFF,
+        TEMPERATURE,
+        LIGHTNING,
+        GRAVITY,
+        FIRE
+    };
+    static constexpr int numEvents = (int)Event::FIRE + 1;
 }
