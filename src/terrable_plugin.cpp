@@ -1,6 +1,7 @@
 #include <UT/UT_DSOVersion.h>
 #include <UT/UT_Math.h>
 #include <UT/UT_Interrupt.h>
+#include <UT/UT_MxNoise.h>
 
 #include <GU/GU_Detail.h>
 #include <GU/GU_PrimPoly.h>
@@ -14,7 +15,6 @@
 #include <OP/OP_Operator.h>
 #include <OP/OP_OperatorTable.h>
 #include <OP/OP_AutoLockInputs.h>
-
 
 #include <limits.h>
 #include "terrable_plugin.hpp"
@@ -227,18 +227,23 @@ bool SOP_Terrable::writeOutputLayers()
         return false;
     }
 
+    GEO_PrimVolume* heightPrim = primVolume;
+
     auto& heightWriteHandle = primVolume->getVoxelWriteHandle();
 
+    // set individual layer values, creating layers that are not present
     for (int terrainLayerIdx = 0; terrainLayerIdx < numTerrainLayers; ++terrainLayerIdx)
     {
         const auto& layerName = terrainLayerNames[terrainLayerIdx];
         if (!readTerrainLayer(&primVolume, layerName))
         {
             UT_VoxelArrayF voxelArray;
-            voxelArray.size(heightWriteHandle->getXRes(), heightWriteHandle->getYRes(), heightWriteHandle->getZRes()); // TODO: shows wrong voxel size in node info panel
+            voxelArray.size(width, height, 1);
 
             primVolume = GU_PrimVolume::build(gdp);
             primVolume->setVoxels(&voxelArray);
+
+            primVolume->setTransform(heightPrim->getTransform());
 
             GA_RWHandleS nameAttribHandle(gdp->addStringTuple(GA_ATTRIB_PRIMITIVE, "name", 1));
             if (!nameAttribHandle.isValid())
@@ -260,6 +265,7 @@ bool SOP_Terrable::writeOutputLayers()
         }
     }
 
+    // set height (combined height of bedrock and granular materials)
     for (int y = 0; y < height; ++y)
     {
         for (int x = 0; x < width; ++x)
@@ -271,6 +277,46 @@ bool SOP_Terrable::writeOutputLayers()
             }
 
             heightWriteHandle->setValue(x, y, 0, height);
+        }
+    }
+
+    // set color
+    const std::string suffixes[] = {"x", "y", "z"};
+
+    for (int i = 0; i < 3; ++i)
+    {
+        const auto& suffix = suffixes[i];
+        const std::string colorLayerName = "color." + suffix;
+
+        if (!readTerrainLayer(&primVolume, colorLayerName))
+        {
+            UT_VoxelArrayF voxelArray;
+            voxelArray.size(width, height, 1);
+
+            primVolume->setTransform(heightPrim->getTransform());
+
+            primVolume = GU_PrimVolume::build(gdp);
+            primVolume->setVoxels(&voxelArray);
+
+            GA_RWHandleS nameAttribHandle(gdp->addStringTuple(GA_ATTRIB_PRIMITIVE, "name", 1));
+            if (!nameAttribHandle.isValid())
+            {
+                return false;
+            }
+
+            nameAttribHandle.set(primVolume->getMapOffset(), colorLayerName);
+        }
+
+        auto& colorWriteHandle = primVolume->getVoxelWriteHandle();
+
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                float rockThickness = terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] * 0.02f;
+                float sandThickness = terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] * 0.02f;
+                colorWriteHandle->setValue(x, y, 0, i == 0 ? rockThickness : (i == 1 ? sandThickness : 0.f));
+            }
         }
     }
 }
@@ -286,8 +332,11 @@ void SOP_Terrable::increaseHeightfieldHeight(OP_Context& context)
     {
         for (int x = 0; x < width; ++x)
         {
-            terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] += simTimeYears * ((float)x / width);
-            terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] += simTimeYears * ((float)y / height);
+            UT_Vector3 noise;
+            UT_MxNoise::perlin(noise, { x * 0.01f, y * 0.01f });
+
+            terrainLayers[posToIndex(x, y, TerrainLayer::ROCK)] += simTimeYears * (0.5f + 0.5f * noise.x());
+            terrainLayers[posToIndex(x, y, TerrainLayer::SAND)] += simTimeYears * (0.5f + 0.5f * noise.y());
         }
     }
 }
