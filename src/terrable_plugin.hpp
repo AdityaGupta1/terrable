@@ -16,10 +16,6 @@ private:
     int height;
     std::vector<float> terrainLayers;
 
-    UT_BoundingBox bbox;
-    float xCellSize;
-    float yCellSize;
-
 protected:
     SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op);
     virtual ~SOP_Terrable();
@@ -37,6 +33,10 @@ private:
     int getSeed(fpreal t) { return evalInt("seed", 0, t); }
 
     size_t posToIndex(int x, int y, TerrainLayer layer) const;
+    inline size_t posToIndex(UT_Vector2i pos, TerrainLayer layer) const
+    {
+        return posToIndex(pos.x(), pos.y(), layer);
+    }
 
     float calculateElevation(int x, int y) const;
     float calculateSlope(int x, int y) const;

@@ -24,7 +24,7 @@ using namespace Terrable;
 constexpr float layerColorThreshold = 0.05f;
 
 SOP_Terrable::SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op)
-    : SOP_Node(net, name, op), width(-1), height(-1), xCellSize(0), yCellSize(0)
+    : SOP_Node(net, name, op), width(-1), height(-1)
 {}
 
 SOP_Terrable::~SOP_Terrable() {}
@@ -91,8 +91,8 @@ float SOP_Terrable::calculateSlope(int x, int y) const
     float hDown = calculateElevation(x, std::max(y - 1, 0));
     float hUp = calculateElevation(x, std::min(y + 1, height - 1));
 
-    float slopeX = (hRight - hLeft) / (2.f * xCellSize);
-    float slopeY = (hUp - hDown) / (2.f * yCellSize);
+    float slopeX = (hRight - hLeft) * 0.5f;
+    float slopeY = (hUp - hDown) * 0.5f;
 
     return sqrt(slopeX * slopeX + slopeY * slopeY);
 }
@@ -114,12 +114,6 @@ void SOP_Terrable::setTerrainSize(int newWidth, int newHeight)
     width = newWidth;
     height = newHeight;
     terrainLayers.resize(numTerrainLayers * width * height);
-
-    UT_Matrix4R xform;
-    xform.identity();
-    gdp->getBBox(bbox, xform); // not sure if providing identity matrix here does anything
-    xCellSize = bbox.sizeX() / width;
-    yCellSize = bbox.sizeY() / height;
 }
 
 bool SOP_Terrable::readTerrainLayer(GEO_PrimVolume** volume, const std::string& layerName)
@@ -376,27 +370,55 @@ void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
     }
 }
 
+// TODO: make these into editable node parameters
+constexpr float Ks = 0.030f; // soil softness (higher = more bedrock erosion)
+constexpr float Kc = 0.015f; // sediment capaicty (higher = more sediment transported)
+
+constexpr float rockMoistureCapacity = 0.05f;
+constexpr float sandMoistureCapacity = 0.15f;
+constexpr float humusMoistureCapacity = 0.60f;
+
+constexpr float soilAbsorptionRate = 0.30f;
+
+constexpr float sourceMoistureReduction = 1.0f;
+
+struct TerrainLayerChange
+{
+    UT_Vector2i pos;
+    TerrainLayer layer;
+    float change;
+
+    TerrainLayerChange(UT_Vector2i pos, TerrainLayer layer, float change)
+        : pos(pos), layer(layer), change(change)
+    {}
+};
+
+// TODO: currently erodes bedrock into humus and transports humus, should instead erode bedrock/rocks into rocks/sand and transport rocks/sand/humus
+//       maybe erode/transport from top to bottom until capacity is reached? or erode each type proportionally?
 void SOP_Terrable::simulateRunoffEvent(int x, int y)
 {
-    // TODO: calculate initial water amount
+    std::vector<TerrainLayerChange> terrainLayerChanges;
+
+    float currentWater = 1.0f;
+    // TODO: reduce initial water amount proportionally to plant density (water intercepted by plants and released to the atmosphere through evaporation)
 
     UT_Vector2i sourcePos = { x, y };
 
-    UT_Vector2i currentPos = sourcePos;
-    UT_Vector2i nextPos;
+    UT_Vector2i thisPos = sourcePos;
+    UT_Vector2i nextPos(0, 0);
     while (true)
     {
         std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
         float totalSlope = 0.f;
         for (const auto& cardinalDirection : cardinalDirections)
         {
-            UT_Vector2i nextPosCandidate = currentPos + cardinalDirection;
+            UT_Vector2i nextPosCandidate = thisPos + cardinalDirection;
             if (nextPosCandidate.x() < 0 || nextPosCandidate.x() >= width || nextPosCandidate.y() < 0 || nextPosCandidate.y() >= height)
             {
                 continue;
             }
 
-            float slope = calculateSlope(currentPos, nextPosCandidate);
+            float slope = calculateSlope(thisPos, nextPosCandidate);
             if (slope >= 0.f)
             {
                 continue;
@@ -409,29 +431,62 @@ void SOP_Terrable::simulateRunoffEvent(int x, int y)
 
         if (totalSlope == 0.f) // reached terrain local minimum
         {
-            // TODO: what happens to excess water?
+            // TODO: what happens to remaining water?
             break;
         }
 
         float rand = SYSdrand48() * totalSlope;
+        float thisSlope = 0.f;
         for (const auto& [nextPosCandidate, slope] : nextPosCandidates)
         {
             if (rand < slope)
             {
                 nextPos = nextPosCandidate;
+                thisSlope = slope;
                 break;
             }
 
             rand -= slope;
         }
 
-        // TEMP: testing
-        terrainLayers[posToIndex(currentPos.x(), currentPos.y(), TerrainLayer::BEDROCK)] -= 0.1f;
-        terrainLayers[posToIndex(nextPos.x(), nextPos.y(), TerrainLayer::BEDROCK)] += 0.1f;
+        float thisMoistureCapacity =
+            terrainLayers[posToIndex(thisPos, TerrainLayer::ROCK)] * rockMoistureCapacity +
+            terrainLayers[posToIndex(thisPos, TerrainLayer::SAND)] * sandMoistureCapacity +
+            terrainLayers[posToIndex(thisPos, TerrainLayer::HUMUS)] * humusMoistureCapacity;
+        float thisMoisture = terrainLayers[posToIndex(thisPos, TerrainLayer::MOISTURE)];
 
-        // TODO: actual erosion
-        // probably scale sediment capacity by cell size?
+        float soilAbsorption = fmin(soilAbsorptionRate / thisSlope, thisMoistureCapacity - thisMoisture);
+        currentWater -= soilAbsorption;
+        terrainLayerChanges.emplace_back(thisPos, TerrainLayer::MOISTURE, +soilAbsorption);
+
+        float thisSedimentCapacity = currentWater * Kc;
+
+        float thisSediment = terrainLayers[posToIndex(thisPos, TerrainLayer::HUMUS)];
+        float nextSediment = terrainLayers[posToIndex(nextPos, TerrainLayer::HUMUS)];
+        if (thisSediment > thisSedimentCapacity)
+        {
+            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::HUMUS, -thisSedimentCapacity);
+            terrainLayerChanges.emplace_back(nextPos, TerrainLayer::HUMUS, +thisSedimentCapacity);
+        }
+        else
+        {
+            float erodedSediment = Ks * (thisSedimentCapacity - thisSediment);
+            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::HUMUS, -thisSediment);
+            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::BEDROCK, -erodedSediment);
+            terrainLayerChanges.emplace_back(nextPos, TerrainLayer::HUMUS, +(thisSediment + erodedSediment));
+        }
+
+        thisPos = nextPos;
     }
+
+    for (const auto& change : terrainLayerChanges)
+    {
+        terrainLayers[posToIndex(change.pos, change.layer)] += change.change;
+    }
+
+    // "Once the runoff sequence terminates we approximate the effects of plant transpiration and seepage into groundwater by reducing the moisture at the source p0 by a constant amount."
+    float& sourceMoisture = terrainLayers[posToIndex(sourcePos, TerrainLayer::MOISTURE)];
+    sourceMoisture = fmax(sourceMoisture - sourceMoistureReduction, 0.f);
 }
 
 void SOP_Terrable::simulateLightningEvent(int x, int y)
