@@ -92,8 +92,8 @@ float SOP_Terrable::calculateSlope(int x, int y) const
     float hDown = calculateElevation(x, std::max(y - 1, 0));
     float hUp = calculateElevation(x, std::min(y + 1, height - 1));
 
-    float slopeX = (hRight - hLeft) * 0.5f;
-    float slopeY = (hUp - hDown) * 0.5f;
+    float slopeX = (hRight - hLeft) / (2.f * xCellSize);
+    float slopeY = (hUp - hDown) / (2.f * yCellSize);
 
     return sqrt(slopeX * slopeX + slopeY * slopeY);
 }
@@ -103,8 +103,8 @@ float SOP_Terrable::calculateSlope(UT_Vector2i pos1, UT_Vector2i pos2) const
     float h1 = calculateElevation(pos1.x(), pos1.y());
     float h2 = calculateElevation(pos2.x(), pos2.y());
 
-    float dx = pos1.x() - pos2.x();
-    float dy = pos1.y() - pos2.y();
+    float dx = (pos1.x() - pos2.x()) * xCellSize;
+    float dy = (pos1.y() - pos2.y()) * yCellSize;
     float d = sqrtf(dx * dx + dy * dy);
 
     return (h2 - h1) / d;
@@ -115,6 +115,12 @@ void SOP_Terrable::setTerrainSize(int newWidth, int newHeight)
     width = newWidth;
     height = newHeight;
     terrainLayers.resize(numTerrainLayers * width * height);
+
+    UT_Matrix4R xform;
+    xform.identity();
+    gdp->getBBox(bbox, xform); // not sure if providing identity matrix here does anything
+    xCellSize = bbox.sizeX() / width;
+    yCellSize = bbox.sizeY() / height;
 }
 
 bool SOP_Terrable::readTerrainLayer(GEO_PrimVolume** volume, const std::string& layerName)
@@ -407,7 +413,7 @@ void SOP_Terrable::simulateRunoffEvent(int x, int y)
 
     // TODO: set initial water based on rainfall
     // TODO: reduce initial water amount proportionally to plant density (water intercepted by plants and released to the atmosphere through evaporation)
-    float currentWater = 4.0f;
+    float currentWater = 1.6f;
     float carriedRock = 0.f;
     float carriedSand = 0.f;
     float carriedHumus = 0.f;

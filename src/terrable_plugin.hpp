@@ -16,6 +16,10 @@ private:
     int height;
     std::vector<float> terrainLayers;
 
+    UT_BoundingBox bbox;
+    float xCellSize;
+    float yCellSize;
+
 protected:
     SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op);
     virtual ~SOP_Terrable();
