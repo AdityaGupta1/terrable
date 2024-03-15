@@ -84,6 +84,7 @@ float SOP_Terrable::calculateElevation(int x, int y) const
     return elevation;
 }
 
+// TODO: re-add cell size into the calculation
 float SOP_Terrable::calculateSlope(int x, int y) const
 {
     float hLeft = calculateElevation(std::max(x - 1, 0), y);
@@ -371,16 +372,23 @@ void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
 }
 
 // TODO: make these into editable node parameters
-constexpr float Ks = 0.030f; // soil softness (higher = more bedrock erosion)
-constexpr float Kc = 0.015f; // sediment capaicty (higher = more sediment transported)
+constexpr float bedrockSoftness = 0.004f; // higher = more erosion
+constexpr float bedrockSedimentShieldingFactor = 1.2f; // higher = more shielding
+constexpr float rockSoftness = 0.008f;
 
-constexpr float rockMoistureCapacity = 0.05f;
-constexpr float sandMoistureCapacity = 0.15f;
-constexpr float humusMoistureCapacity = 0.60f;
+constexpr float rockDepositionConstant = 0.8f; // higher = more deposition
+constexpr float sandDepositionConstant = 0.7f;
+constexpr float humusDepositionConstant = 0.6f;
 
-constexpr float soilAbsorptionRate = 0.30f;
+constexpr float sedimentCapacityConstant = 0.01f; // higher = more sediment transported
 
-constexpr float sourceMoistureReduction = 1.0f;
+constexpr float rockMoistureCapacity = 0.02f;
+constexpr float sandMoistureCapacity = 0.05f;
+constexpr float humusMoistureCapacity = 0.20f;
+
+constexpr float soilMoistureAbsorptionRate = 0.12f;
+
+constexpr float sourceMoistureReduction = 0.5f;
 
 struct TerrainLayerChange
 {
@@ -393,22 +401,25 @@ struct TerrainLayerChange
     {}
 };
 
-// TODO: currently erodes bedrock into humus and transports humus, should instead erode bedrock/rocks into rocks/sand and transport rocks/sand/humus
-//       maybe erode/transport from top to bottom until capacity is reached? or erode each type proportionally?
 void SOP_Terrable::simulateRunoffEvent(int x, int y)
 {
     std::vector<TerrainLayerChange> terrainLayerChanges;
 
-    float currentWater = 1.0f;
+    // TODO: set initial water based on rainfall
     // TODO: reduce initial water amount proportionally to plant density (water intercepted by plants and released to the atmosphere through evaporation)
+    float currentWater = 4.0f;
+    float carriedRock = 0.f;
+    float carriedSand = 0.f;
+    float carriedHumus = 0.f;
 
     UT_Vector2i sourcePos = { x, y };
 
     UT_Vector2i thisPos = sourcePos;
     UT_Vector2i nextPos(0, 0);
+    std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
     while (true)
     {
-        std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
+        nextPosCandidates.clear();
         float totalSlope = 0.f;
         for (const auto& cardinalDirection : cardinalDirections)
         {
@@ -429,51 +440,100 @@ void SOP_Terrable::simulateRunoffEvent(int x, int y)
             totalSlope += slope;
         }
 
-        if (totalSlope == 0.f) // reached terrain local minimum
+        if (nextPosCandidates.empty() || currentWater <= 0.f) // reached terrain local minimum or ran out of water
         {
-            // TODO: what happens to remaining water?
+            // TODO: what happens to excess water?
+            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::ROCK, carriedRock);
+            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::SAND, carriedSand);
+            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::HUMUS, carriedHumus);
             break;
         }
 
         float rand = SYSdrand48() * totalSlope;
         float thisSlope = 0.f;
+        bool didSetNextPos = false;
         for (const auto& [nextPosCandidate, slope] : nextPosCandidates)
         {
             if (rand < slope)
             {
                 nextPos = nextPosCandidate;
                 thisSlope = slope;
+                didSetNextPos = true;
                 break;
             }
 
             rand -= slope;
         }
 
+        // corrects for floating point precision errors in the above random sampling logic
+        if (!didSetNextPos)
+        {
+            auto& [nextPosCandidate, slope] = nextPosCandidates.back();
+            nextPos = nextPosCandidate;
+            thisSlope = slope;
+        }
+
+        float thisRock = terrainLayers[posToIndex(thisPos, TerrainLayer::ROCK)];
+        float thisSand = terrainLayers[posToIndex(thisPos, TerrainLayer::SAND)];
+        float thisHumus = terrainLayers[posToIndex(thisPos, TerrainLayer::HUMUS)];
+
         float thisMoistureCapacity =
-            terrainLayers[posToIndex(thisPos, TerrainLayer::ROCK)] * rockMoistureCapacity +
-            terrainLayers[posToIndex(thisPos, TerrainLayer::SAND)] * sandMoistureCapacity +
-            terrainLayers[posToIndex(thisPos, TerrainLayer::HUMUS)] * humusMoistureCapacity;
+            thisRock * rockMoistureCapacity +
+            thisSand * sandMoistureCapacity +
+            thisHumus * humusMoistureCapacity;
         float thisMoisture = terrainLayers[posToIndex(thisPos, TerrainLayer::MOISTURE)];
 
-        float soilAbsorption = fmin(soilAbsorptionRate / thisSlope, thisMoistureCapacity - thisMoisture);
+        float soilAbsorption = fmin(soilMoistureAbsorptionRate / thisSlope, thisMoistureCapacity - thisMoisture);
+        soilAbsorption = fmin(soilAbsorption, currentWater);
         currentWater -= soilAbsorption;
         terrainLayerChanges.emplace_back(thisPos, TerrainLayer::MOISTURE, +soilAbsorption);
 
-        float thisSedimentCapacity = currentWater * Kc;
+        float currentSedimentCapacity = currentWater * sedimentCapacityConstant;
 
-        float thisSediment = terrainLayers[posToIndex(thisPos, TerrainLayer::HUMUS)];
-        float nextSediment = terrainLayers[posToIndex(nextPos, TerrainLayer::HUMUS)];
-        if (thisSediment > thisSedimentCapacity)
+        float currentSediment = carriedRock + carriedSand + carriedHumus;
+        if (currentSediment > currentSedimentCapacity)
         {
-            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::HUMUS, -thisSedimentCapacity);
-            terrainLayerChanges.emplace_back(nextPos, TerrainLayer::HUMUS, +thisSedimentCapacity);
+            float excessSedimentRatio = (currentSediment - currentSedimentCapacity) / currentSediment;
+
+            if (carriedRock > 0.f)
+            {
+                float rockDeposition = carriedRock * excessSedimentRatio * rockDepositionConstant;
+                carriedRock -= rockDeposition;
+                terrainLayerChanges.emplace_back(thisPos, TerrainLayer::ROCK, rockDeposition);
+            }
+
+            if (carriedSand > 0.f)
+            {
+                float sandDeposition = carriedSand * excessSedimentRatio * sandDepositionConstant;
+                carriedSand -= sandDeposition;
+                terrainLayerChanges.emplace_back(thisPos, TerrainLayer::SAND, sandDeposition);
+            }
+
+            if (carriedHumus > 0.f)
+            {
+                float humusDeposition = carriedHumus * excessSedimentRatio * humusDepositionConstant;
+                carriedHumus -= humusDeposition;
+                terrainLayerChanges.emplace_back(thisPos, TerrainLayer::HUMUS, humusDeposition);
+            }
         }
         else
         {
-            float erodedSediment = Ks * (thisSedimentCapacity - thisSediment);
-            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::HUMUS, -thisSediment);
-            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::BEDROCK, -erodedSediment);
-            terrainLayerChanges.emplace_back(nextPos, TerrainLayer::HUMUS, +(thisSediment + erodedSediment));
+            // TODO: dampen by vegetation amount
+            float excessSedimentCapacity = currentSedimentCapacity - currentSediment;
+
+            if (thisRock > 0.f)
+            {
+                float rockErosion = fmin(thisRock, excessSedimentCapacity) * rockSoftness;
+                terrainLayerChanges.emplace_back(thisPos, TerrainLayer::ROCK, -rockErosion);
+                carriedSand += rockErosion;
+                excessSedimentCapacity = fmax(0.f, excessSedimentCapacity - rockErosion);
+            }
+
+            float thisSediment = thisRock + thisSand + thisHumus;
+            float bedrockErosionFactor = 1.f / (1.f + bedrockSedimentShieldingFactor * thisSediment);
+            float bedrockErosion = excessSedimentCapacity * bedrockErosionFactor * bedrockSoftness;
+            terrainLayerChanges.emplace_back(thisPos, TerrainLayer::BEDROCK, -bedrockErosion);
+            carriedRock += bedrockErosion;
         }
 
         thisPos = nextPos;
