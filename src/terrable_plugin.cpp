@@ -53,9 +53,15 @@ static PRM_Name seedName("seed", "Random Seed");
 static PRM_Default seedDefault(0);
 static PRM_Range seedRange(PRM_RANGE_UI, 0, PRM_RANGE_UI, 100);
 
+static PRM_Name lightningProbName("lightning_prob", "Lightning Frequency");
+static PRM_Default lightningProbDefault(0);
+static PRM_Range lightningProbRange(PRM_RANGE_UI, 0, PRM_RANGE_UI, 1);
+
 PRM_Template SOP_Terrable::myTemplateList[] = {
     PRM_Template(PRM_INT, PRM_Template::PRM_EXPORT_MIN, 1, &simTimeName, &simTimeDefault, 0, &simTimeRange),
     PRM_Template(PRM_INT, PRM_Template::PRM_EXPORT_MIN, 1, &seedName, &seedDefault, 0, &seedRange),
+    PRM_Template(PRM_FLT, PRM_Template::PRM_EXPORT_MIN, 1, &lightningProbName, &lightningProbDefault, 0, &lightningProbRange),
+
     PRM_Template()
 };
 
@@ -162,6 +168,7 @@ bool SOP_Terrable::readInputLayers()
 
     if (hasBedrock)
     {
+        printf("hasbedrock");
         // read existing layers and populate nonexistent layers with default values
 
         if (!readTerrainLayer(&primVolume, "bedrock"))
@@ -343,7 +350,7 @@ bool SOP_Terrable::writeOutputLayers()
     }
 }
 
-void SOP_Terrable::stepSimulation(OP_Context& context)
+void SOP_Terrable::stepSimulation(OP_Context& context, float lightningProb)
 {
     int numEventsToSimulate = width * height * numEvents;
     for (int i = 0; i < numEventsToSimulate; ++i)
@@ -351,11 +358,11 @@ void SOP_Terrable::stepSimulation(OP_Context& context)
         int x = SYSdrand48() * width;
         int y = SYSdrand48() * height;
         Event event = (Event)(SYSdrand48() * numEvents);
-        simulateEvent(context, x, y, event);
+        simulateEvent(context, x, y, event, lightningProb);
     }
 }
 
-void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
+void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event, float lightningProb)
 {
     switch (event)
     {
@@ -366,7 +373,7 @@ void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
         // TODO
         break;
     case Event::LIGHTNING:
-        simulateLightningEvent(x, y);
+        simulateLightningEvent(x, y, lightningProb);
         break;
     case Event::GRAVITY:
         // TODO
@@ -555,9 +562,33 @@ void SOP_Terrable::simulateRunoffEvent(int x, int y)
     sourceMoisture = fmax(sourceMoisture - sourceMoistureReduction, 0.f);
 }
 
-void SOP_Terrable::simulateLightningEvent(int x, int y)
+void SOP_Terrable::simulateLightningEvent(int x, int y, float lightningChance)
 {
-    // TODO
+
+    std::vector<TerrainLayerChange> terrainLayerChanges;
+
+    // TODO: set initial water based on rainfall
+    // TODO: reduce initial water amount proportionally to plant density (water intercepted by plants and released to the atmosphere through evaporation)
+    float currentWater = 1.6f;
+    float carriedRock = 0.f;
+    float carriedSand = 0.f;
+    float carriedHumus = 0.f;
+
+    UT_Vector2i sourcePos = { x, y };
+
+    UT_Vector2i thisPos = sourcePos;
+    UT_Vector2i nextPos(0, 0);
+    std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
+
+    // E = local curvature
+    float E = calculateSlope(x, y);
+
+    // klc = scaling factor
+    float klc = 1.f;
+
+    // kL = maximum probability that lightning strikes at that cell
+    float kL = lightningChance;
+
 }
 
 OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
@@ -588,6 +619,7 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
 
     int simTimeYears = getSimTime(now);
     int seed = getSeed(now);
+    int lightningProb = getLightningProb(now);
 
     SYSsrand48(seed);
 
@@ -598,7 +630,7 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
             break;
         }
 
-        stepSimulation(context);
+        stepSimulation(context, lightningProb);
     }
 
     if (!writeOutputLayers())
