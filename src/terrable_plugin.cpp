@@ -53,9 +53,15 @@ static PRM_Name seedName("seed", "Random Seed");
 static PRM_Default seedDefault(0);
 static PRM_Range seedRange(PRM_RANGE_UI, 0, PRM_RANGE_UI, 100);
 
+static PRM_Name lightningProbName("lightning_prob", "Lightning Frequency");
+static PRM_Default lightningProbDefault(0);
+static PRM_Range lightningProbRange(PRM_RANGE_UI, 0, PRM_RANGE_UI, 1);
+
 PRM_Template SOP_Terrable::myTemplateList[] = {
     PRM_Template(PRM_INT, PRM_Template::PRM_EXPORT_MIN, 1, &simTimeName, &simTimeDefault, 0, &simTimeRange),
     PRM_Template(PRM_INT, PRM_Template::PRM_EXPORT_MIN, 1, &seedName, &seedDefault, 0, &seedRange),
+    PRM_Template(PRM_FLT, PRM_Template::PRM_EXPORT_MIN, 1, &lightningProbName, &lightningProbDefault, 0, &lightningProbRange),
+
     PRM_Template()
 };
 
@@ -162,6 +168,7 @@ bool SOP_Terrable::readInputLayers()
 
     if (hasBedrock)
     {
+        printf("hasbedrock");
         // read existing layers and populate nonexistent layers with default values
 
         if (!readTerrainLayer(&primVolume, "bedrock"))
@@ -343,7 +350,7 @@ bool SOP_Terrable::writeOutputLayers()
     }
 }
 
-void SOP_Terrable::stepSimulation(OP_Context& context)
+void SOP_Terrable::stepSimulation(OP_Context& context, float lightningProb)
 {
     int numEventsToSimulate = width * height * numEvents;
     for (int i = 0; i < numEventsToSimulate; ++i)
@@ -351,11 +358,11 @@ void SOP_Terrable::stepSimulation(OP_Context& context)
         int x = SYSdrand48() * width;
         int y = SYSdrand48() * height;
         Event event = (Event)(SYSdrand48() * numEvents);
-        simulateEvent(context, x, y, event);
+        simulateEvent(context, x, y, event, lightningProb);
     }
 }
 
-void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
+void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event, float lightningProb)
 {
     switch (event)
     {
@@ -366,7 +373,7 @@ void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
         // TODO
         break;
     case Event::LIGHTNING:
-        simulateLightningEvent(x, y);
+        simulateLightningEvent(x, y, lightningProb);
         break;
     case Event::GRAVITY:
         // TODO
@@ -430,7 +437,8 @@ void SOP_Terrable::simulateRunoffEvent(int x, int y)
         for (const auto& cardinalDirection : cardinalDirections)
         {
             UT_Vector2i nextPosCandidate = thisPos + cardinalDirection;
-            if (nextPosCandidate.x() < 0 || nextPosCandidate.x() >= width || nextPosCandidate.y() < 0 || nextPosCandidate.y() >= height)
+            if (nextPosCandidate.x() < 0 || nextPosCandidate.x() >= width ||
+                nextPosCandidate.y() < 0 || nextPosCandidate.y() >= height)
             {
                 continue;
             }
@@ -550,14 +558,95 @@ void SOP_Terrable::simulateRunoffEvent(int x, int y)
         terrainLayers[posToIndex(change.pos, change.layer)] += change.change;
     }
 
-    // "Once the runoff sequence terminates we approximate the effects of plant transpiration and seepage into groundwater by reducing the moisture at the source p0 by a constant amount."
+    // "Once the runoff sequence terminates we approximate the effects of plant transpiration and seepage into groundwater
+    // by reducing the moisture at the source p0 by a constant amount."
     float& sourceMoisture = terrainLayers[posToIndex(sourcePos, TerrainLayer::MOISTURE)];
     sourceMoisture = fmax(sourceMoisture - sourceMoistureReduction, 0.f);
 }
 
-void SOP_Terrable::simulateLightningEvent(int x, int y)
+void SOP_Terrable::simulateLightningEvent(int x, int y, float lightningChance)
 {
-    // TODO
+
+    std::vector<TerrainLayerChange> terrainLayerChanges;
+
+    UT_Vector2i sourcePos = { x, y };
+
+    UT_Vector2i thisPos = sourcePos;
+
+    // float thisBedrock = terrainLayers[posToIndex(thisPos, TerrainLayer::BEDROCK)];
+    float bedrockToRemove = 0.5f;
+    float thisRock = terrainLayers[posToIndex(thisPos, TerrainLayer::ROCK)];
+    float thisSand = terrainLayers[posToIndex(thisPos, TerrainLayer::SAND)];
+    float thisVegetation = terrainLayers[posToIndex(thisPos, TerrainLayer::VEGETATION)];
+    float thisDeadVegetation = terrainLayers[posToIndex(thisPos, TerrainLayer::DEAD_VEGETATION)];
+
+    std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
+
+    // E = local curvature
+    float Eslope = calculateSlope(x, y);
+
+    // klc = scaling factor
+    float klc = 0.1f;
+
+    // kL = maximum probability that lightning strikes at that cell
+    float kL = lightningChance;
+
+    // kls = minimum curvature for which probability kL is achieved
+    float kls = 30.f;
+
+    float e = 2.7182818f;
+
+    // lp = probability of damage
+    float lp = kL * std::min(1.f, pow(e, klc * (Eslope - kls)));
+
+    float r = SYSdrand48(); // get a random float between 0 and 1
+
+    // damage done
+    if (r <= lp) {
+
+        // replace vegetation with dead vegetation
+        terrainLayerChanges.emplace_back(thisPos, TerrainLayer::VEGETATION, -thisVegetation);
+        terrainLayerChanges.emplace_back(thisPos, TerrainLayer::DEAD_VEGETATION, thisVegetation);
+
+        // obtain 4 directly surrounding coords
+        std::vector<UT_Vector2i> nextPosCandidates;
+        nextPosCandidates.emplace_back(thisPos);
+
+        for (const auto& cardinalDirection : cardinalDirections)
+        {
+            UT_Vector2i nextPosCandidate = thisPos + cardinalDirection;
+            if (nextPosCandidate.x() < 0 || nextPosCandidate.x() >= width ||
+                nextPosCandidate.y() < 0 || nextPosCandidate.y() >= height)
+            {
+                continue;
+            }
+            nextPosCandidates.emplace_back(nextPosCandidate);
+        }
+
+        //spread granular materials to 4 directly surrounding coords
+        for (UT_Vector2i candidate : nextPosCandidates)
+        {
+            float r2 = SYSdrand48(); // get a random float between 0 and 1
+            if (r2 > 0.3f) {
+                terrainLayerChanges.emplace_back(candidate, TerrainLayer::ROCK, bedrockToRemove / 4.f);
+            }
+            else {
+                terrainLayerChanges.emplace_back(candidate, TerrainLayer::SAND, bedrockToRemove / 4.f);
+            }
+            break;
+        }
+
+        // remove bedrock in current coord
+        terrainLayerChanges.emplace_back(thisPos, TerrainLayer::BEDROCK, -bedrockToRemove);
+
+    }
+
+    // make all changes
+    for (const auto& change : terrainLayerChanges)
+    {
+        terrainLayers[posToIndex(change.pos, change.layer)] += change.change;
+    }
+
 }
 
 OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
@@ -588,6 +677,7 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
 
     int simTimeYears = getSimTime(now);
     int seed = getSeed(now);
+    float lightningProb = getLightningProb(now);
 
     SYSsrand48(seed);
 
@@ -598,7 +688,7 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
             break;
         }
 
-        stepSimulation(context);
+        stepSimulation(context, lightningProb);
     }
 
     if (!writeOutputLayers())

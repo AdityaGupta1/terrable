@@ -1,4 +1,4 @@
-#include "LSystem.h"    
+#include "LSystem.h"
 #include <fstream>
 #include <stack>
 

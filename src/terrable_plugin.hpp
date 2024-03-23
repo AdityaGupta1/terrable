@@ -35,6 +35,7 @@ protected:
 private:
     int getSimTime(fpreal t) { return evalInt("sim_time", 0, t); }
     int getSeed(fpreal t) { return evalInt("seed", 0, t); }
+    float getLightningProb(fpreal t) { return evalFloat("lightning_prob", 0, t); }
 
     size_t posToIndex(int x, int y, TerrainLayer layer) const;
     inline size_t posToIndex(UT_Vector2i pos, TerrainLayer layer) const
@@ -54,11 +55,11 @@ private:
     UT_VoxelArrayWriteHandleF createOrReadLayerAndGetWriteHandle(const std::string& layerName, const GEO_PrimVolume* heightPrim);
     bool writeOutputLayers();
 
-    void stepSimulation(OP_Context& context);
-    void simulateEvent(OP_Context& context, int x, int y, Event event);
+    void stepSimulation(OP_Context& context, float lightningProb);
+    void simulateEvent(OP_Context& context, int x, int y, Event event, float lightningProb);
 
     void simulateRunoffEvent(int x, int y);
-    void simulateLightningEvent(int x, int y);
+    void simulateLightningEvent(int x, int y, float lightningChance);
 
 protected:
     OP_ERROR cookMySop(OP_Context& context) override;
