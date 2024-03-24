@@ -54,7 +54,7 @@ static PRM_Default seedDefault(0);
 static PRM_Range seedRange(PRM_RANGE_UI, 0, PRM_RANGE_UI, 100);
 
 static PRM_Name lightningChanceName("lightning_chance", "Lightning Chance");
-static PRM_Default lightningChanceDefault(0.f);
+static PRM_Default lightningChanceDefault(0.005f);
 static PRM_Range lightningChanceRange(PRM_RANGE_RESTRICTED, 0.f, PRM_RANGE_RESTRICTED, 1.f);
 
 PRM_Template SOP_Terrable::myTemplateList[] = {
@@ -108,10 +108,9 @@ float SOP_Terrable::calculateSlope(const UT_Vector2i& pos1, const UT_Vector2i& p
     float h1 = calculateElevation(pos1, topLayer);
     float h2 = calculateElevation(pos2, topLayer);
 
-    // TODO: can probably extract this "* cellSize" to after the sqrtf
-    float dx = (pos1.x() - pos2.x()) * cellSize;
-    float dy = (pos1.y() - pos2.y()) * cellSize;
-    float d = sqrtf(dx * dx + dy * dy);
+    float dx = pos2.x() - pos1.x();
+    float dy = pos2.y() - pos1.y();
+    float d = sqrtf(dx * dx + dy * dy) * cellSize;
 
     return (h2 - h1) / d;
 }
@@ -127,8 +126,6 @@ void SOP_Terrable::setTerrainSize(int newWidth, int newHeight)
     height = newHeight;
     terrainLayers.clear();
     terrainLayers.resize(numTerrainLayers * width * height);
-
-    printf("width: %d, height: %d\n", width, height);
 
     UT_Matrix4R xform;
     xform.identity();
@@ -175,7 +172,6 @@ bool SOP_Terrable::readInputLayers()
 
     if (hasBedrock)
     {
-        printf("hasbedrock");
         // read existing layers and populate nonexistent layers with default values
 
         if (!readTerrainLayer(&primVolume, "bedrock"))
@@ -576,8 +572,9 @@ void SOP_Terrable::simulateTemperatureEvent(OP_Context& context, int x, int y)
 }
 
 // TODO: make these into editable node parameters
-constexpr float k_l_c = 0.3f; // curvature scaling factor
-constexpr float k_l_s = 1.2f; // minimum curvature for which maximum lightning chance is achieved
+constexpr float k_l_c = 1.2f; // curvature scaling factor
+constexpr float k_l_s = 2.0f; // minimum curvature for which maximum lightning chance is achieved
+constexpr float lightningBedrockToRemove = 0.4f;
 
 void SOP_Terrable::simulateLightningEvent(OP_Context& context, int x, int y)
 {
@@ -590,7 +587,6 @@ void SOP_Terrable::simulateLightningEvent(OP_Context& context, int x, int y)
     UT_Vector2i thisPos = sourcePos;
 
     // float thisBedrock = terrainLayers[posToIndex(thisPos, TerrainLayer::BEDROCK)];
-    float bedrockToRemove = 0.5f;
     float thisRock = terrainLayers[posToIndex(thisPos, TerrainLayer::ROCK)];
     float thisSand = terrainLayers[posToIndex(thisPos, TerrainLayer::SAND)];
     float thisVegetation = terrainLayers[posToIndex(thisPos, TerrainLayer::VEGETATION)];
@@ -633,16 +629,16 @@ void SOP_Terrable::simulateLightningEvent(OP_Context& context, int x, int y)
         {
             float r2 = SYSdrand48(); // get a random float between 0 and 1
             if (r2 > 0.3f) {
-                terrainLayerChanges.emplace_back(candidate, TerrainLayer::ROCK, bedrockToRemove / 4.f);
+                terrainLayerChanges.emplace_back(candidate, TerrainLayer::ROCK, lightningBedrockToRemove * 0.25f);
             }
             else {
-                terrainLayerChanges.emplace_back(candidate, TerrainLayer::SAND, bedrockToRemove / 4.f);
+                terrainLayerChanges.emplace_back(candidate, TerrainLayer::SAND, lightningBedrockToRemove * 0.25f);
             }
             break;
         }
 
         // remove bedrock in current coord
-        terrainLayerChanges.emplace_back(thisPos, TerrainLayer::BEDROCK, -bedrockToRemove);
+        terrainLayerChanges.emplace_back(thisPos, TerrainLayer::BEDROCK, -lightningBedrockToRemove);
     }
 
     // make all changes
@@ -650,9 +646,9 @@ void SOP_Terrable::simulateLightningEvent(OP_Context& context, int x, int y)
 }
 
 // TODO: make these into editable node parameters
-constexpr float rockFrictionAngleDegrees = 36.f;
-constexpr float sandFrictionAngleDegrees = 28.f;
-constexpr float humusFrictionAngleDegrees = 22.f;
+constexpr float rockFrictionAngleDegrees = 22.f;
+constexpr float sandFrictionAngleDegrees = 18.f;
+constexpr float humusFrictionAngleDegrees = 16.f;
 
 void SOP_Terrable::simulateGravityEvent(OP_Context& context, int x, int y)
 {
@@ -680,10 +676,10 @@ void SOP_Terrable::simulateGravityEvent(OP_Context& context, int x, int y)
     UT_Vector2i thisPos(x, y);
     UT_Vector2i nextPos;
     float nextPosSlope;
-    while (calculateNextPosFromSlope(thisPos, &nextPos, &nextPosSlope, terrainLayer))
+    while (true)
     {
-        float thisSediment = terrainLayers[posToIndex(x, y, terrainLayer)];
-        if (thisSediment <= 0.f)
+        float thisSediment = terrainLayers[posToIndex(thisPos, terrainLayer)];
+        if (thisSediment <= 0.f || !calculateNextPosFromSlope(thisPos, &nextPos, &nextPosSlope, terrainLayer))
         {
             break;
         }
@@ -699,9 +695,8 @@ void SOP_Terrable::simulateGravityEvent(OP_Context& context, int x, int y)
             break;
         }
 
-        float sedimentToMove = fmin(heightGap - frictionHeight, thisSediment) * SYSdrand48();
-
         // TODO: additional contribution proportional to curvature
+        float sedimentToMove = fmin(heightGap - frictionHeight, thisSediment) * SYSdrand48();
 
         terrainLayerChanges.emplace_back(thisPos, terrainLayer, -sedimentToMove);
         terrainLayerChanges.emplace_back(nextPos, terrainLayer, sedimentToMove);
