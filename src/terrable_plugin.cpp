@@ -24,7 +24,7 @@ using namespace Terrable;
 constexpr float layerColorThreshold = 0.05f;
 
 SOP_Terrable::SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op)
-    : SOP_Node(net, name, op), width(-1), height(-1), xCellSize(0.f), yCellSize(0.f)
+    : SOP_Node(net, name, op), width(-1), height(-1), cellSize(0.f)
 {}
 
 SOP_Terrable::~SOP_Terrable() {}
@@ -80,36 +80,37 @@ size_t SOP_Terrable::posToIndex(int x, int y, TerrainLayer layer) const
     return ((int)layer * height * width) + (y * width) + x;
 }
 
-float SOP_Terrable::calculateElevation(int x, int y) const
+float SOP_Terrable::calculateElevation(int x, int y, TerrainLayer topLayer) const
 {
     float elevation = 0.f;
-    for (int terrainLayerIdx = (int)TerrainLayer::BEDROCK; terrainLayerIdx <= (int)TerrainLayer::HUMUS; ++terrainLayerIdx)
+    for (int terrainLayerIdx = (int)TerrainLayer::BEDROCK; terrainLayerIdx <= (int)topLayer; ++terrainLayerIdx)
     {
         elevation += terrainLayers[posToIndex(x, y, (TerrainLayer)terrainLayerIdx)];
     }
     return elevation;
 }
 
-float SOP_Terrable::calculateSlope(int x, int y) const
+float SOP_Terrable::calculateSlope(int x, int y, TerrainLayer topLayer) const
 {
-    float hLeft = calculateElevation(std::max(x - 1, 0), y);
-    float hRight = calculateElevation(std::min(x + 1, width - 1), y);
-    float hDown = calculateElevation(x, std::max(y - 1, 0));
-    float hUp = calculateElevation(x, std::min(y + 1, height - 1));
+    float hLeft = calculateElevation(std::max(x - 1, 0), y, topLayer);
+    float hRight = calculateElevation(std::min(x + 1, width - 1), y, topLayer);
+    float hDown = calculateElevation(x, std::max(y - 1, 0), topLayer);
+    float hUp = calculateElevation(x, std::min(y + 1, height - 1), topLayer);
 
-    float slopeX = (hRight - hLeft) / (2.f * xCellSize);
-    float slopeY = (hUp - hDown) / (2.f * yCellSize);
+    float slopeX = (hRight - hLeft) / (2.f * cellSize);
+    float slopeY = (hUp - hDown) / (2.f * cellSize);
 
     return sqrt(slopeX * slopeX + slopeY * slopeY);
 }
 
-float SOP_Terrable::calculateSlope(UT_Vector2i pos1, UT_Vector2i pos2) const
+float SOP_Terrable::calculateSlope(const UT_Vector2i& pos1, const UT_Vector2i& pos2, TerrainLayer topLayer) const
 {
-    float h1 = calculateElevation(pos1.x(), pos1.y());
-    float h2 = calculateElevation(pos2.x(), pos2.y());
+    float h1 = calculateElevation(pos1, topLayer);
+    float h2 = calculateElevation(pos2, topLayer);
 
-    float dx = (pos1.x() - pos2.x()) * xCellSize;
-    float dy = (pos1.y() - pos2.y()) * yCellSize;
+    // TODO: can probably extract this "* cellSize" to after the sqrtf
+    float dx = (pos1.x() - pos2.x()) * cellSize;
+    float dy = (pos1.y() - pos2.y()) * cellSize;
     float d = sqrtf(dx * dx + dy * dy);
 
     return (h2 - h1) / d;
@@ -124,13 +125,15 @@ void SOP_Terrable::setTerrainSize(int newWidth, int newHeight)
 {
     width = newWidth;
     height = newHeight;
+    terrainLayers.clear();
     terrainLayers.resize(numTerrainLayers * width * height);
+
+    printf("width: %d, height: %d\n", width, height);
 
     UT_Matrix4R xform;
     xform.identity();
     gdp->getBBox(bbox, xform); // not sure if providing identity matrix here does anything
-    xCellSize = bbox.sizeX() / width;
-    yCellSize = bbox.sizeY() / height;
+    cellSize = bbox.sizeX() / width;
 }
 
 bool SOP_Terrable::readTerrainLayer(GEO_PrimVolume** volume, const std::string& layerName)
@@ -252,7 +255,8 @@ bool SOP_Terrable::readInputLayers()
             for (int x = 0; x < width; ++x)
             {
                 float bedrockSlope = calculateSlope(x, y);
-                float humusHeight = expf(-(bedrockSlope * bedrockSlope) / 0.480898346962988f);
+                //float humusHeight = expf(-(bedrockSlope * bedrockSlope) / 0.480898346962988f);
+                float humusHeight = expf(7.f * -(bedrockSlope * bedrockSlope));
                 terrainLayers[posToIndex(x, y, TerrainLayer::HUMUS)] = humusHeight;
             }
         }
@@ -409,18 +413,15 @@ constexpr float soilMoistureAbsorptionRate = 0.12f;
 
 constexpr float sourceMoistureReduction = 0.5f;
 
-struct TerrainLayerChange
+void SOP_Terrable::applyTerrainLayerChanges(const std::vector<TerrainLayerChange>& terrainLayerChanges)
 {
-    UT_Vector2i pos;
-    TerrainLayer layer;
-    float change;
+    for (const auto& change : terrainLayerChanges)
+    {
+        terrainLayers[posToIndex(change.pos, change.layer)] += change.change;
+    }
+}
 
-    TerrainLayerChange(UT_Vector2i pos, TerrainLayer layer, float change)
-        : pos(pos), layer(layer), change(change)
-    {}
-};
-
-bool SOP_Terrable::calculateNextPosFromSlope(const UT_Vector2i& thisPos, UT_Vector2i* nextPos, float* slope)
+bool SOP_Terrable::calculateNextPosFromSlope(const UT_Vector2i& thisPos, UT_Vector2i* nextPos, float* slope, TerrainLayer topLayer)
 {
     std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
 
@@ -434,7 +435,7 @@ bool SOP_Terrable::calculateNextPosFromSlope(const UT_Vector2i& thisPos, UT_Vect
             continue;
         }
 
-        float slope = calculateSlope(thisPos, nextPosCandidate);
+        float slope = calculateSlope(thisPos, nextPosCandidate, topLayer);
         if (slope >= 0.f)
         {
             continue;
@@ -477,10 +478,10 @@ void SOP_Terrable::simulateRunoffEvent(OP_Context& context, int x, int y)
     float carriedSand = 0.f;
     float carriedHumus = 0.f;
 
-    UT_Vector2i sourcePos = { x, y };
+    UT_Vector2i sourcePos(x, y);
 
     UT_Vector2i thisPos = sourcePos;
-    UT_Vector2i nextPos(0, 0);
+    UT_Vector2i nextPos;
     float nextPosSlope;
     while (true)
     {
@@ -561,10 +562,7 @@ void SOP_Terrable::simulateRunoffEvent(OP_Context& context, int x, int y)
         thisPos = nextPos;
     }
 
-    for (const auto& change : terrainLayerChanges)
-    {
-        terrainLayers[posToIndex(change.pos, change.layer)] += change.change;
-    }
+    applyTerrainLayerChanges(terrainLayerChanges);
 
     // "Once the runoff sequence terminates we approximate the effects of plant transpiration and seepage into groundwater
     // by reducing the moisture at the source p0 by a constant amount."
@@ -630,7 +628,7 @@ void SOP_Terrable::simulateLightningEvent(OP_Context& context, int x, int y)
             nextPosCandidates.emplace_back(nextPosCandidate);
         }
 
-        //spread granular materials to 4 directly surrounding coords
+        // spread granular materials to 4 directly surrounding coords
         for (UT_Vector2i candidate : nextPosCandidates)
         {
             float r2 = SYSdrand48(); // get a random float between 0 and 1
@@ -648,53 +646,72 @@ void SOP_Terrable::simulateLightningEvent(OP_Context& context, int x, int y)
     }
 
     // make all changes
-    for (const auto& change : terrainLayerChanges)
-    {
-        terrainLayers[posToIndex(change.pos, change.layer)] += change.change;
-    }
+    applyTerrainLayerChanges(terrainLayerChanges);
 }
 
 // TODO: make these into editable node parameters
-constexpr float rockFrictionAngleDegrees = 30.f;
-constexpr float sandFrictionAngleDegrees = 20.f;
-constexpr float humusFrictionAngleDegrees = 15.f;
+constexpr float rockFrictionAngleDegrees = 36.f;
+constexpr float sandFrictionAngleDegrees = 28.f;
+constexpr float humusFrictionAngleDegrees = 22.f;
 
 void SOP_Terrable::simulateGravityEvent(OP_Context& context, int x, int y)
 {
-    float rand = SYSdrand48() * 3.f;
-    TerrainLayer layer;
+    float rand = SYSdrand48();
+    TerrainLayer terrainLayer;
     float frictionAngleDegrees;
-    if (rand < 1.f)
+    if (rand < 0.333333333333333f)
     {
-        layer = TerrainLayer::ROCK;
+        terrainLayer = TerrainLayer::ROCK;
         frictionAngleDegrees = rockFrictionAngleDegrees;
     }
-    else if (rand < 2.f)
+    else if (rand < 0.666666666666666f)
     {
-        layer = TerrainLayer::SAND;
+        terrainLayer = TerrainLayer::SAND;
         frictionAngleDegrees = sandFrictionAngleDegrees;
     }
     else
     {
-        layer = TerrainLayer::HUMUS;
+        terrainLayer = TerrainLayer::HUMUS;
         frictionAngleDegrees = humusFrictionAngleDegrees;
     }
 
-    // TODO: below code should go in a loop of slope-dependent trajectory
+    std::vector<TerrainLayerChange> terrainLayerChanges;
 
-    float& thisSediment = terrainLayers[posToIndex(x, y, layer)];
-    if (thisSediment == 0.f)
+    UT_Vector2i thisPos(x, y);
+    UT_Vector2i nextPos;
+    float nextPosSlope;
+    while (calculateNextPosFromSlope(thisPos, &nextPos, &nextPosSlope, terrainLayer))
     {
-        return;
+        float thisSediment = terrainLayers[posToIndex(x, y, terrainLayer)];
+        if (thisSediment <= 0.f)
+        {
+            break;
+        }
+
+        // TODO: increase friction angle based on vegetation
+        float frictionHeight = tanf(SYSdegToRad(frictionAngleDegrees)) * cellSize;
+
+        float thisElevation = calculateElevation(thisPos, terrainLayer);
+        float nextElevation = calculateElevation(nextPos, terrainLayer);
+        float heightGap = thisElevation - nextElevation;
+        if (heightGap < frictionHeight)
+        {
+            break;
+        }
+
+        float sedimentToMove = fmin(heightGap - frictionHeight, thisSediment) * SYSdrand48();
+
+        // TODO: additional contribution proportional to curvature
+
+        terrainLayerChanges.emplace_back(thisPos, terrainLayer, -sedimentToMove);
+        terrainLayerChanges.emplace_back(nextPos, terrainLayer, sedimentToMove);
+
+        // TODO: destroy vegetation
+
+        thisPos = nextPos;
     }
 
-    float frictionHeight = tanf(SYSdegToRad(frictionAngleDegrees));
-    if (thisSediment < frictionHeight)
-    {
-        return;
-    }
-
-    // TODO
+    applyTerrainLayerChanges(terrainLayerChanges);
 }
 
 void SOP_Terrable::simulateFireEvent(OP_Context& context, int x, int y)
