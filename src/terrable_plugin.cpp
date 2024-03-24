@@ -420,6 +420,52 @@ struct TerrainLayerChange
     {}
 };
 
+bool SOP_Terrable::calculateNextPosFromSlope(const UT_Vector2i& thisPos, UT_Vector2i* nextPos, float* slope)
+{
+    std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
+
+    float totalSlope = 0.f;
+    for (const auto& cardinalDirection : cardinalDirections)
+    {
+        UT_Vector2i nextPosCandidate = thisPos + cardinalDirection;
+        if (nextPosCandidate.x() < 0 || nextPosCandidate.x() >= width ||
+            nextPosCandidate.y() < 0 || nextPosCandidate.y() >= height)
+        {
+            continue;
+        }
+
+        float slope = calculateSlope(thisPos, nextPosCandidate);
+        if (slope >= 0.f)
+        {
+            continue;
+        }
+
+        slope = -slope; // make it positive
+        nextPosCandidates.emplace_back(nextPosCandidate, slope);
+        totalSlope += slope;
+    }
+
+    if (nextPosCandidates.empty())
+    {
+        return false;
+    }
+
+    float rand = SYSdrand48() * totalSlope;
+    for (const auto& [nextPosCandidate, nextPosSlope] : nextPosCandidates)
+    {
+        if (rand < nextPosSlope)
+        {
+            *nextPos = nextPosCandidate;
+            *slope = nextPosSlope;
+            return true;
+        }
+
+        rand -= nextPosSlope;
+    }
+
+    return false;
+}
+
 void SOP_Terrable::simulateRunoffEvent(OP_Context& context, int x, int y)
 {
     std::vector<TerrainLayerChange> terrainLayerChanges;
@@ -435,62 +481,18 @@ void SOP_Terrable::simulateRunoffEvent(OP_Context& context, int x, int y)
 
     UT_Vector2i thisPos = sourcePos;
     UT_Vector2i nextPos(0, 0);
-    std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
+    float nextPosSlope;
     while (true)
     {
-        nextPosCandidates.clear();
-        float totalSlope = 0.f;
-        for (const auto& cardinalDirection : cardinalDirections)
-        {
-            UT_Vector2i nextPosCandidate = thisPos + cardinalDirection;
-            if (nextPosCandidate.x() < 0 || nextPosCandidate.x() >= width ||
-                nextPosCandidate.y() < 0 || nextPosCandidate.y() >= height)
-            {
-                continue;
-            }
+        bool foundNextPos = calculateNextPosFromSlope(thisPos, &nextPos, &nextPosSlope);
 
-            float slope = calculateSlope(thisPos, nextPosCandidate);
-            if (slope >= 0.f)
-            {
-                continue;
-            }
-
-            slope = -slope; // make it positive
-            nextPosCandidates.emplace_back(nextPosCandidate, slope);
-            totalSlope += slope;
-        }
-
-        if (nextPosCandidates.empty() || currentWater <= 0.f) // reached terrain local minimum or ran out of water
+        if (!foundNextPos || currentWater <= 0.f) // reached terrain local minimum or ran out of water
         {
             // TODO: what happens to excess water?
             terrainLayerChanges.emplace_back(thisPos, TerrainLayer::ROCK, carriedRock);
             terrainLayerChanges.emplace_back(thisPos, TerrainLayer::SAND, carriedSand);
             terrainLayerChanges.emplace_back(thisPos, TerrainLayer::HUMUS, carriedHumus);
             break;
-        }
-
-        float rand = SYSdrand48() * totalSlope;
-        float thisSlope = 0.f;
-        bool didSetNextPos = false;
-        for (const auto& [nextPosCandidate, slope] : nextPosCandidates)
-        {
-            if (rand < slope)
-            {
-                nextPos = nextPosCandidate;
-                thisSlope = slope;
-                didSetNextPos = true;
-                break;
-            }
-
-            rand -= slope;
-        }
-
-        // corrects for floating point precision errors in the above random sampling logic
-        if (!didSetNextPos)
-        {
-            auto& [nextPosCandidate, slope] = nextPosCandidates.back();
-            nextPos = nextPosCandidate;
-            thisSlope = slope;
         }
 
         float thisRock = terrainLayers[posToIndex(thisPos, TerrainLayer::ROCK)];
@@ -503,7 +505,7 @@ void SOP_Terrable::simulateRunoffEvent(OP_Context& context, int x, int y)
             thisHumus * humusMoistureCapacity;
         float thisMoisture = terrainLayers[posToIndex(thisPos, TerrainLayer::MOISTURE)];
 
-        float soilAbsorption = fmin(soilMoistureAbsorptionRate / thisSlope, thisMoistureCapacity - thisMoisture);
+        float soilAbsorption = fmin(soilMoistureAbsorptionRate / nextPosSlope, thisMoistureCapacity - thisMoisture);
         soilAbsorption = fmin(soilAbsorption, currentWater);
         currentWater -= soilAbsorption;
         terrainLayerChanges.emplace_back(thisPos, TerrainLayer::MOISTURE, +soilAbsorption);
@@ -650,11 +652,48 @@ void SOP_Terrable::simulateLightningEvent(OP_Context& context, int x, int y)
     {
         terrainLayers[posToIndex(change.pos, change.layer)] += change.change;
     }
-
 }
+
+// TODO: make these into editable node parameters
+constexpr float rockFrictionAngleDegrees = 30.f;
+constexpr float sandFrictionAngleDegrees = 20.f;
+constexpr float humusFrictionAngleDegrees = 15.f;
 
 void SOP_Terrable::simulateGravityEvent(OP_Context& context, int x, int y)
 {
+    float rand = SYSdrand48() * 3.f;
+    TerrainLayer layer;
+    float frictionAngleDegrees;
+    if (rand < 1.f)
+    {
+        layer = TerrainLayer::ROCK;
+        frictionAngleDegrees = rockFrictionAngleDegrees;
+    }
+    else if (rand < 2.f)
+    {
+        layer = TerrainLayer::SAND;
+        frictionAngleDegrees = sandFrictionAngleDegrees;
+    }
+    else
+    {
+        layer = TerrainLayer::HUMUS;
+        frictionAngleDegrees = humusFrictionAngleDegrees;
+    }
+
+    // TODO: below code should go in a loop of slope-dependent trajectory
+
+    float& thisSediment = terrainLayers[posToIndex(x, y, layer)];
+    if (thisSediment == 0.f)
+    {
+        return;
+    }
+
+    float frictionHeight = tanf(SYSdegToRad(frictionAngleDegrees));
+    if (thisSediment < frictionHeight)
+    {
+        return;
+    }
+
     // TODO
 }
 

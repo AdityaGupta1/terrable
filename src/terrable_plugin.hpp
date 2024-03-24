@@ -58,6 +58,8 @@ private:
     void stepSimulation(OP_Context& context);
     void simulateEvent(OP_Context& context, int x, int y, Event event);
 
+    bool calculateNextPosFromSlope(const UT_Vector2i& thisPos, UT_Vector2i* nextPos, float* slope);
+
     void simulateRunoffEvent(OP_Context& context, int x, int y);
     void simulateTemperatureEvent(OP_Context& context, int x, int y);
     void simulateLightningEvent(OP_Context& context, int x, int y);
