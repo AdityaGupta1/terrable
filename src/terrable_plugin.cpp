@@ -24,7 +24,7 @@ using namespace Terrable;
 constexpr float layerColorThreshold = 0.05f;
 
 SOP_Terrable::SOP_Terrable(OP_Network* net, const char* name, OP_Operator* op)
-    : SOP_Node(net, name, op), width(-1), height(-1)
+    : SOP_Node(net, name, op), width(-1), height(-1), xCellSize(0.f), yCellSize(0.f)
 {}
 
 SOP_Terrable::~SOP_Terrable() {}
@@ -53,14 +53,14 @@ static PRM_Name seedName("seed", "Random Seed");
 static PRM_Default seedDefault(0);
 static PRM_Range seedRange(PRM_RANGE_UI, 0, PRM_RANGE_UI, 100);
 
-static PRM_Name lightningProbName("lightning_prob", "Lightning Frequency");
-static PRM_Default lightningProbDefault(0);
-static PRM_Range lightningProbRange(PRM_RANGE_UI, 0, PRM_RANGE_UI, 1);
+static PRM_Name lightningChanceName("lightning_chance", "Lightning Chance");
+static PRM_Default lightningChanceDefault(0.f);
+static PRM_Range lightningChanceRange(PRM_RANGE_RESTRICTED, 0.f, PRM_RANGE_RESTRICTED, 1.f);
 
 PRM_Template SOP_Terrable::myTemplateList[] = {
     PRM_Template(PRM_INT, PRM_Template::PRM_EXPORT_MIN, 1, &simTimeName, &simTimeDefault, 0, &simTimeRange),
     PRM_Template(PRM_INT, PRM_Template::PRM_EXPORT_MIN, 1, &seedName, &seedDefault, 0, &seedRange),
-    PRM_Template(PRM_FLT, PRM_Template::PRM_EXPORT_MIN, 1, &lightningProbName, &lightningProbDefault, 0, &lightningProbRange),
+    PRM_Template(PRM_FLT, PRM_Template::PRM_EXPORT_MIN, 1, &lightningChanceName, &lightningChanceDefault, 0, &lightningChanceRange),
 
     PRM_Template()
 };
@@ -90,7 +90,6 @@ float SOP_Terrable::calculateElevation(int x, int y) const
     return elevation;
 }
 
-// TODO: re-add cell size into the calculation
 float SOP_Terrable::calculateSlope(int x, int y) const
 {
     float hLeft = calculateElevation(std::max(x - 1, 0), y);
@@ -114,6 +113,11 @@ float SOP_Terrable::calculateSlope(UT_Vector2i pos1, UT_Vector2i pos2) const
     float d = sqrtf(dx * dx + dy * dy);
 
     return (h2 - h1) / d;
+}
+
+float SOP_Terrable::calculateCuravature(int x, int y) const
+{
+    return calculateSlope(x, y); // TODO: pretty sure curvature calculation is more complicated than this
 }
 
 void SOP_Terrable::setTerrainSize(int newWidth, int newHeight)
@@ -348,9 +352,11 @@ bool SOP_Terrable::writeOutputLayers()
             }
         }
     }
+
+    return true;
 }
 
-void SOP_Terrable::stepSimulation(OP_Context& context, float lightningProb)
+void SOP_Terrable::stepSimulation(OP_Context& context)
 {
     int numEventsToSimulate = width * height * numEvents;
     for (int i = 0; i < numEventsToSimulate; ++i)
@@ -358,28 +364,28 @@ void SOP_Terrable::stepSimulation(OP_Context& context, float lightningProb)
         int x = SYSdrand48() * width;
         int y = SYSdrand48() * height;
         Event event = (Event)(SYSdrand48() * numEvents);
-        simulateEvent(context, x, y, event, lightningProb);
+        simulateEvent(context, x, y, event);
     }
 }
 
-void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event, float lightningProb)
+void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
 {
     switch (event)
     {
     case Event::RUNOFF:
-        simulateRunoffEvent(x, y);
+        simulateRunoffEvent(context, x, y);
         break;
     case Event::TEMPERATURE:
-        // TODO
+        simulateTemperatureEvent(context, x, y);
         break;
     case Event::LIGHTNING:
-        simulateLightningEvent(x, y, lightningProb);
+        simulateLightningEvent(context, x, y);
         break;
     case Event::GRAVITY:
-        // TODO
+        simulateGravityEvent(context, x, y);
         break;
     case Event::FIRE:
-        // TODO
+        simulateFireEvent(context, x, y);
         break;
     }
 }
@@ -414,7 +420,7 @@ struct TerrainLayerChange
     {}
 };
 
-void SOP_Terrable::simulateRunoffEvent(int x, int y)
+void SOP_Terrable::simulateRunoffEvent(OP_Context& context, int x, int y)
 {
     std::vector<TerrainLayerChange> terrainLayerChanges;
 
@@ -564,8 +570,18 @@ void SOP_Terrable::simulateRunoffEvent(int x, int y)
     sourceMoisture = fmax(sourceMoisture - sourceMoistureReduction, 0.f);
 }
 
-void SOP_Terrable::simulateLightningEvent(int x, int y, float lightningChance)
+void SOP_Terrable::simulateTemperatureEvent(OP_Context& context, int x, int y)
 {
+    // TODO
+}
+
+// TODO: make these into editable node parameters
+constexpr float k_l_c = 0.3f; // curvature scaling factor
+constexpr float k_l_s = 1.2f; // minimum curvature for which maximum lightning chance is achieved
+
+void SOP_Terrable::simulateLightningEvent(OP_Context& context, int x, int y)
+{
+    fpreal now = context.getTime();
 
     std::vector<TerrainLayerChange> terrainLayerChanges;
 
@@ -582,31 +598,20 @@ void SOP_Terrable::simulateLightningEvent(int x, int y, float lightningChance)
 
     std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
 
-    // E = local curvature
-    float Eslope = calculateSlope(x, y);
+    float localCurvature = calculateCuravature(x, y);
 
-    // klc = scaling factor
-    float klc = 0.1f;
-
-    // kL = maximum probability that lightning strikes at that cell
-    float kL = lightningChance;
-
-    // kls = minimum curvature for which probability kL is achieved
-    float kls = 30.f;
-
-    float e = 2.7182818f;
+    // k_L = maximum probability that lightning strikes at that cell
+    float k_L = getFloatParam(lightningChanceName, context);
 
     // lp = probability of damage
-    float lp = kL * std::min(1.f, pow(e, klc * (Eslope - kls)));
+    float lp = k_L * fmin(1.f, expf(k_l_c * (localCurvature - k_l_s)));
 
     float r = SYSdrand48(); // get a random float between 0 and 1
 
     // damage done
-    if (r <= lp) {
-
-        // replace vegetation with dead vegetation
-        terrainLayerChanges.emplace_back(thisPos, TerrainLayer::VEGETATION, -thisVegetation);
-        terrainLayerChanges.emplace_back(thisPos, TerrainLayer::DEAD_VEGETATION, thisVegetation);
+    if (r < lp) {
+        // TODO: destroy vegetation if present and exit early accordingly
+        //       based on the paper's wording, it seems like no damage is done to bedrock if vegetation is destroyed by lightning
 
         // obtain 4 directly surrounding coords
         std::vector<UT_Vector2i> nextPosCandidates;
@@ -638,7 +643,6 @@ void SOP_Terrable::simulateLightningEvent(int x, int y, float lightningChance)
 
         // remove bedrock in current coord
         terrainLayerChanges.emplace_back(thisPos, TerrainLayer::BEDROCK, -bedrockToRemove);
-
     }
 
     // make all changes
@@ -647,6 +651,16 @@ void SOP_Terrable::simulateLightningEvent(int x, int y, float lightningChance)
         terrainLayers[posToIndex(change.pos, change.layer)] += change.change;
     }
 
+}
+
+void SOP_Terrable::simulateGravityEvent(OP_Context& context, int x, int y)
+{
+    // TODO
+}
+
+void SOP_Terrable::simulateFireEvent(OP_Context& context, int x, int y)
+{
+    // TODO
 }
 
 OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
@@ -675,9 +689,8 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
 
     fpreal now = context.getTime();
 
-    int simTimeYears = getSimTime(now);
-    int seed = getSeed(now);
-    float lightningProb = getLightningProb(now);
+    int simTimeYears = getIntParam(simTimeName, context);
+    int seed = getIntParam(seedName, context);
 
     SYSsrand48(seed);
 
@@ -688,7 +701,7 @@ OP_ERROR SOP_Terrable::cookMySop(OP_Context& context)
             break;
         }
 
-        stepSimulation(context, lightningProb);
+        stepSimulation(context);
     }
 
     if (!writeOutputLayers())
