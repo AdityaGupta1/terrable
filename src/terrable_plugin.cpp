@@ -110,6 +110,167 @@ float SOP_Terrable::calculateSlope(UT_Vector2i pos1, UT_Vector2i pos2) const
     return (h2 - h1) / d;
 }
 
+UT_Vector3F SOP_Terrable::calculateNormal(int x, int y) const
+{
+    UT_Vector3F output = { 1, 1, 1 };
+
+    UT_Vector3F L = { -1, calculateElevation(std::max(x - 1, 0), y), 0 };
+    UT_Vector3F R = { 1, calculateElevation(std::min(x + 1, width - 1), y), 0 };
+    UT_Vector3F D = { 0, calculateElevation(x, std::max(y - 1, 0)), -1 };
+    UT_Vector3F U = { 0, calculateElevation(x, std::min(y + 1, height - 1)), 1 };
+
+    output = cross(R - L, U - D);
+
+    output.normalize();
+
+    return output;
+}
+
+bool SOP_Terrable::rayCast(int x, int y, UT_Vector3F rayDirection) const
+{
+    int ceilY = calculateElevation(x, y);
+    //std::cout << "starting val of point: " << ceilY << "\n";
+    UT_Vector3i currCell = { x, ceilY, y };
+    //std::cout << "starting pos: " << currCell << "\n";
+    UT_Vector3F rayOrigin = currCell;
+    UT_Vector3F rayDir = rayDirection;
+    rayDir.normalize();
+    //std::cout << "rayDir: " << rayDir << std::endl;
+
+    //height test
+
+    //= ray length so far, times ray height, compared to calculateElevation!
+    //if calculateElevation is greater, then we have reached an intersection!
+    //otherwise, keep going!
+
+    //Based on minecraft gridMarch
+    int itr = 0;
+    float curr_t = 0.f;
+    while (itr < std::sqrt(width * width + height * height)) {
+        itr++;
+        //update currCell!
+        //UT_Vector2i signVec = UT_Vector2i(1, 1);
+        float min_t = std::sqrt(3.f);
+        int interfaceAxis = -1; // Track axis for which t is smallest
+        for (int i = 0; i < 3; ++i) { // Iterate over the three axes
+            if (rayDir[i] != 0) { // Is ray parallel to axis i?
+                int sign_i = 1;
+                if (std::signbit(rayDir[i])) {
+                    sign_i = -1;
+                }
+                //std::cout << "sign of rayDir[" << i << "] is: " << sign_i << "\n";
+                float offset = std::max(0.f, (float)sign_i);
+                //std::cout << "offset =" << offset << "\n";
+
+                // If the player is *exactly* on an interface then
+                // they'll never move if they're looking in a negative direction
+                if (currCell[i] == rayOrigin[i] && offset == 0.f) {
+                    offset = -1.f;
+                }
+
+                int nextIntercept = currCell[i] + offset;
+                //std::cout << nextIntercept << std::endl;
+                float axis_t = (nextIntercept - rayOrigin[i]) / rayDir[i];
+
+                if (axis_t <= min_t) {
+                    //std::cout << axis_t << std::endl;
+                    min_t = axis_t;
+                    interfaceAxis = i;
+                }
+            }
+        }
+
+        if (interfaceAxis == -1) {
+            throw std::out_of_range("interfaceAxis was -1 after the for loop in gridMarch!");
+        }
+
+        curr_t += min_t; // min_t is declared in slide 7 algorithm
+
+        rayOrigin += rayDir * min_t;
+
+        UT_Vector3i offset = { 0, 0, 0 };
+
+        int sign_ia = 1;
+        if (std::signbit(rayDir[interfaceAxis])) {
+            sign_ia = -1;
+        }
+        offset[interfaceAxis] = std::min(0.f, (float)sign_ia);
+
+        currCell = UT_Vector3i(floor(rayOrigin[0] + offset[0]), floor(rayOrigin[1] + offset[1]), floor(rayOrigin[2] + offset[2]));
+        //std::cout << "next currCell: " << currCell << "\n";
+        //basecase 1
+        //outside of grid
+        if (currCell[0] < 0 || currCell[0] >= width || currCell[2] < 0 || currCell[2] >= height) {
+            //std::cout << "false case- exited grid!\n";
+            return false;
+        }
+        //basecase 2
+        //if the actual elevation is greater than the raycast found height! (at some x, z)
+        if (currCell[1] < calculateElevation(currCell[0], currCell[2])) {
+            //std::cout << "actual elevation =" << calculateElevation(currCell[0], currCell[2]) << ", raymarch height = " << currCell[1] << "\n";
+            //std::cout << "true case- occlusion occured!\n";
+            return true;
+        }
+    }
+    return false;
+}
+
+
+float SOP_Terrable::calculateIllumination(int x, int y) const
+{
+    //1. Initialize
+    //Hard-coded Sun Direction for now.
+    UT_Vector3F sunPos = { 1, 1, 1 };
+    //UT_Vector3F mainLightDirection = -sunPos;
+    //mainLightDirection.normalize();
+    UT_Vector3F rayToSun = sunPos;
+    rayToSun.normalize();
+
+    
+    float currentElevation = calculateElevation(x, y);
+
+    //2. Normal Test
+    UT_Vector3F normal = calculateNormal(x, y);
+
+    //std::cout << "normal: " << normal << "\n";
+
+    // if normal and sun are pointed away from each other ... ignore
+
+    if (dot(-normal, rayToSun) < 0) {
+        //std::cout << "dot with sun = " << dot(normal, rayToSun) << "\n";
+        //std::cout << "normal is: " << -normal << ", and rayToSun is: " << rayToSun << "\n";
+        return 0;
+    }
+    //else {
+    //    return 1;
+    //}
+    //
+
+    UT_Vector2i sourcePos = { x, y };
+
+    UT_Vector2i thisPos = sourcePos;
+    UT_Vector2i nextPos(0, 0);
+    //std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
+
+    //3. RayCast Occlusion Check
+    if (rayCast(x, y, rayToSun)) {
+        //Occlusion occurs!
+        return 0;
+    }
+
+    //4. Calculate Illumination Value
+
+    //Lambert Term * Current Elevation
+
+    //float sunIntensity = 10.0f;
+    //float lambertTerm = std::abs(dot(normal, rayToSun));
+
+    //float illumination = sunIntensity * lambertTerm * currentElevation;
+    //std::cout << "We got to this stage\n";
+    //return illumination;
+    return std::abs(dot(normal, rayToSun));
+}
+
 void SOP_Terrable::setTerrainSize(int newWidth, int newHeight)
 {
     width = newWidth;
@@ -200,7 +361,7 @@ bool SOP_Terrable::readInputLayers()
             }
         }
     }
-    else // hasHeight
+    else // hasHeight (base case)
     {
         // assume we want to populate layers from scratch using height as bedrock
 
@@ -364,12 +525,16 @@ void SOP_Terrable::simulateEvent(OP_Context& context, int x, int y, Event event)
         break;
     case Event::TEMPERATURE:
         // TODO
+        simulateTemperatureEvent(x, y);
+
         break;
     case Event::LIGHTNING:
         simulateLightningEvent(x, y);
         break;
     case Event::GRAVITY:
         // TODO
+        simulateGravityEvent(x, y);
+
         break;
     case Event::FIRE:
         // TODO
@@ -427,6 +592,7 @@ void SOP_Terrable::simulateRunoffEvent(int x, int y)
     {
         nextPosCandidates.clear();
         float totalSlope = 0.f;
+        //Check each nei
         for (const auto& cardinalDirection : cardinalDirections)
         {
             UT_Vector2i nextPosCandidate = thisPos + cardinalDirection;
@@ -555,7 +721,74 @@ void SOP_Terrable::simulateRunoffEvent(int x, int y)
     sourceMoisture = fmax(sourceMoisture - sourceMoistureReduction, 0.f);
 }
 
+void SOP_Terrable::simulateTemperatureEvent(int x, int y)
+{
+    // TODO
+    // Given a random position p(x, y), we first find delta_t, which is the estimated difference in night and day temp.
+    // Using delta_t, we dampen it in proportion to the local density of vegetation V(p) and thickness of sand and humus G(p).
+    // Finally, this is the probability used to determine whether the current tile fractures and becomes rocks or not.
+
+    //1. Find illumination
+    float illumination_p = calculateIllumination(x, y);
+    if (illumination_p != 0) {
+        //std::cout << "0 illumination case!\n";
+
+        //here, we should color or something
+
+        //terrainLayers[posToIndex({x, y}, TerrainLayer::HUMUS)] = 100.0f;
+        //std::cout << "Occluded!!!\n";
+        //terrainLayers[posToIndex({ x, y }, TerrainLayer::HUMUS)] = 100.0f;
+        //White = illuminated
+        terrainLayers[posToIndex({ x, y }, TerrainLayer::VEGETATION)] = 1.0f;
+    }
+
+    //4. elevation calculation
+
+    float elevation = std::max(0.f, calculateElevation(x, y));
+    float elevationWeight = 2.0f;
+    //don't need elevation above 0.f
+
+    //5. delta T calculation
+
+    float deltaTemperature = illumination_p * (1.0f + elevation / elevationWeight);
+
+    //6. Rest of the formula!
+
+    float k = 10.0f;
+    float s_p = 1.0f;
+    float k_g = 1.0f;
+    float G_p = 1.0f;
+    float k_v = 1.0f;
+    float V_p = 1.0f;
+
+    float probability = k * deltaTemperature * s_p / (1 + k_g * G_p + k_v * V_p);
+    //std::cout << "p = " <<  probability << "\n";
+    float rand = SYSdrand48();
+
+    if (probability > rand) {
+        //Trigger event!
+
+        //Turn bedrock into rock
+        //Amount converted = difference between local and critical slope
+        //critical slope = some threshold
+
+        float criticalSlope = 0.5f;
+
+        float rockAmount = std::max(0.f, calculateSlope(x, y) - criticalSlope);
+
+        //reduce bedrock amount
+        //increase rock amount
+        //complete!
+        //std::cout << "probability: " << probability << "\n";
+    }
+}
+
 void SOP_Terrable::simulateLightningEvent(int x, int y)
+{
+    // TODO
+}
+
+void SOP_Terrable::simulateGravityEvent(int x, int y)
 {
     // TODO
 }

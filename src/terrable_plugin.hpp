@@ -45,6 +45,9 @@ private:
     float calculateElevation(int x, int y) const;
     float calculateSlope(int x, int y) const;
     float calculateSlope(UT_Vector2i pos1, UT_Vector2i pos2) const;
+    UT_Vector3F calculateNormal(int x, int y) const;
+    bool rayCast(int x, int y, UT_Vector3F rayDirection) const;
+    float calculateIllumination(int x, int y) const;
 
     void setTerrainSize(int newWidth, int newHeight);
 
@@ -59,6 +62,8 @@ private:
 
     void simulateRunoffEvent(int x, int y);
     void simulateLightningEvent(int x, int y);
+    void simulateTemperatureEvent(int x, int y);
+    void simulateGravityEvent(int x, int y);
 
 protected:
     OP_ERROR cookMySop(OP_Context& context) override;
