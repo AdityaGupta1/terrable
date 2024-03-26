@@ -126,30 +126,22 @@ UT_Vector3F SOP_Terrable::calculateNormal(int x, int y) const
     return output;
 }
 
-bool SOP_Terrable::rayCast(int x, int y, UT_Vector3F rayDirection) const
+//Returns true if raymarch intersection occurs. i.e. occlusion
+bool SOP_Terrable::gridMarchOcclusionTest(int x, int y, UT_Vector3F rayDirection) const
 {
+    //Setup
     int ceilY = calculateElevation(x, y);
-    //std::cout << "starting val of point: " << ceilY << "\n";
     UT_Vector3i currCell = { x, ceilY, y };
-    //std::cout << "starting pos: " << currCell << "\n";
     UT_Vector3F rayOrigin = currCell;
     UT_Vector3F rayDir = rayDirection;
     rayDir.normalize();
-    //std::cout << "rayDir: " << rayDir << std::endl;
 
-    //height test
-
-    //= ray length so far, times ray height, compared to calculateElevation!
-    //if calculateElevation is greater, then we have reached an intersection!
-    //otherwise, keep going!
-
-    //Based on minecraft gridMarch
+    //3D Gridmarch
     int itr = 0;
     float curr_t = 0.f;
+    //Bounded by diagonal of the voxel heightmap
     while (itr < std::sqrt(width * width + height * height)) {
         itr++;
-        //update currCell!
-        //UT_Vector2i signVec = UT_Vector2i(1, 1);
         float min_t = std::sqrt(3.f);
         int interfaceAxis = -1; // Track axis for which t is smallest
         for (int i = 0; i < 3; ++i) { // Iterate over the three axes
@@ -157,23 +149,21 @@ bool SOP_Terrable::rayCast(int x, int y, UT_Vector3F rayDirection) const
                 int sign_i = 1;
                 if (std::signbit(rayDir[i])) {
                     sign_i = -1;
-                }
-                //std::cout << "sign of rayDir[" << i << "] is: " << sign_i << "\n";
-                float offset = std::max(0.f, (float)sign_i);
-                //std::cout << "offset =" << offset << "\n";
+                } //sign_i = -1 if negative and 1 if positive sign
 
-                // If the player is *exactly* on an interface then
-                // they'll never move if they're looking in a negative direction
+                float offset = std::max(0.f, (float)sign_i);
+
+                //Edge case where the float rayOrigin is equal to integer coords
+                // (the whole max 0 or sign_i thing is predicated on lower-left flooring of float values, thus, we might actually have to
+                // do -1 instead of 0 in this edge case)
                 if (currCell[i] == rayOrigin[i] && offset == 0.f) {
                     offset = -1.f;
                 }
 
                 int nextIntercept = currCell[i] + offset;
-                //std::cout << nextIntercept << std::endl;
                 float axis_t = (nextIntercept - rayOrigin[i]) / rayDir[i];
 
                 if (axis_t <= min_t) {
-                    //std::cout << axis_t << std::endl;
                     min_t = axis_t;
                     interfaceAxis = i;
                 }
@@ -181,10 +171,12 @@ bool SOP_Terrable::rayCast(int x, int y, UT_Vector3F rayDirection) const
         }
 
         if (interfaceAxis == -1) {
-            throw std::out_of_range("interfaceAxis was -1 after the for loop in gridMarch!");
+            std::cout << "ERROR: interfaceAxis was -1 after the for loop in gridMarch!";
+            return false;
         }
 
-        curr_t += min_t; // min_t is declared in slide 7 algorithm
+        //UPDATE CURR_CELL
+        curr_t += min_t;
 
         rayOrigin += rayDir * min_t;
 
@@ -195,23 +187,22 @@ bool SOP_Terrable::rayCast(int x, int y, UT_Vector3F rayDirection) const
             sign_ia = -1;
         }
         offset[interfaceAxis] = std::min(0.f, (float)sign_ia);
-
         currCell = UT_Vector3i(floor(rayOrigin[0] + offset[0]), floor(rayOrigin[1] + offset[1]), floor(rayOrigin[2] + offset[2]));
-        //std::cout << "next currCell: " << currCell << "\n";
-        //basecase 1
-        //outside of grid
+
+        //BASECASES:
+
+        //BASECASE 1: Out of bounds
         if (currCell[0] < 0 || currCell[0] >= width || currCell[2] < 0 || currCell[2] >= height) {
             //std::cout << "false case- exited grid!\n";
             return false;
         }
-        //basecase 2
+        //BASECASE 2: OCCLUSION!
         //if the actual elevation is greater than the raycast found height! (at some x, z)
         if (currCell[1] < calculateElevation(currCell[0], currCell[2])) {
-            //std::cout << "actual elevation =" << calculateElevation(currCell[0], currCell[2]) << ", raymarch height = " << currCell[1] << "\n";
-            //std::cout << "true case- occlusion occured!\n";
             return true;
         }
     }
+    //ELSE, return false.
     return false;
 }
 
@@ -221,53 +212,26 @@ float SOP_Terrable::calculateIllumination(int x, int y) const
     //1. Initialize
     //Hard-coded Sun Direction for now.
     UT_Vector3F sunPos = { 1, 1, 1 };
-    //UT_Vector3F mainLightDirection = -sunPos;
-    //mainLightDirection.normalize();
+
     UT_Vector3F rayToSun = sunPos;
     rayToSun.normalize();
 
-    
     float currentElevation = calculateElevation(x, y);
 
     //2. Normal Test
     UT_Vector3F normal = calculateNormal(x, y);
 
-    //std::cout << "normal: " << normal << "\n";
-
-    // if normal and sun are pointed away from each other ... ignore
-
     if (dot(-normal, rayToSun) < 0) {
-        //std::cout << "dot with sun = " << dot(normal, rayToSun) << "\n";
-        //std::cout << "normal is: " << -normal << ", and rayToSun is: " << rayToSun << "\n";
         return 0;
     }
-    //else {
-    //    return 1;
-    //}
-    //
-
-    UT_Vector2i sourcePos = { x, y };
-
-    UT_Vector2i thisPos = sourcePos;
-    UT_Vector2i nextPos(0, 0);
-    //std::vector<std::pair<UT_Vector2i, float>> nextPosCandidates;
 
     //3. RayCast Occlusion Check
-    if (rayCast(x, y, rayToSun)) {
+    if (gridMarchOcclusionTest(x, y, rayToSun)) {
         //Occlusion occurs!
         return 0;
     }
 
     //4. Calculate Illumination Value
-
-    //Lambert Term * Current Elevation
-
-    //float sunIntensity = 10.0f;
-    //float lambertTerm = std::abs(dot(normal, rayToSun));
-
-    //float illumination = sunIntensity * lambertTerm * currentElevation;
-    //std::cout << "We got to this stage\n";
-    //return illumination;
     return std::abs(dot(normal, rayToSun));
 }
 
@@ -731,43 +695,34 @@ void SOP_Terrable::simulateTemperatureEvent(int x, int y)
     //1. Find illumination
     float illumination_p = calculateIllumination(x, y);
     if (illumination_p != 0) {
-        //std::cout << "0 illumination case!\n";
-
-        //here, we should color or something
-
-        //terrainLayers[posToIndex({x, y}, TerrainLayer::HUMUS)] = 100.0f;
-        //std::cout << "Occluded!!!\n";
-        //terrainLayers[posToIndex({ x, y }, TerrainLayer::HUMUS)] = 100.0f;
-        //White = illuminated
         terrainLayers[posToIndex({ x, y }, TerrainLayer::VEGETATION)] = 1.0f;
     }
 
-    //4. elevation calculation
-
+    //2. elevation calculation
     float elevation = std::max(0.f, calculateElevation(x, y));
-    float elevationWeight = 2.0f;
-    //don't need elevation above 0.f
+    float elevationWeight = 1.7f;
 
-    //5. delta T calculation
+    //3. delta T calculation
 
     float deltaTemperature = illumination_p * (1.0f + elevation / elevationWeight);
 
-    //6. Rest of the formula!
+    //4. Rest of the formula!
 
-    float k = 10.0f;
-    float s_p = 1.0f;
-    float k_g = 1.0f;
-    float G_p = 1.0f;
-    float k_v = 1.0f;
-    float V_p = 1.0f;
+    float k = 0.07f; //overall weight (0.07 is a good value)
+    float s_p = calculateSlope(x, y);
+    float k_g = 2.0f;
+    float G_p = terrainLayers[posToIndex({ x, y }, TerrainLayer::SAND)]
+        + terrainLayers[posToIndex({ x, y }, TerrainLayer::HUMUS)]; //thickness of sand and humus
+    float k_v = 2.0f;
+    float V_p = terrainLayers[posToIndex({ x, y }, TerrainLayer::VEGETATION)]; //vegetation density
 
     float probability = k * deltaTemperature * s_p / (1 + k_g * G_p + k_v * V_p);
-    //std::cout << "p = " <<  probability << "\n";
+
     float rand = SYSdrand48();
 
     if (probability > rand) {
         //Trigger event!
-
+        //std::cout << "p = " << probability << "\n";
         //Turn bedrock into rock
         //Amount converted = difference between local and critical slope
         //critical slope = some threshold
@@ -779,7 +734,14 @@ void SOP_Terrable::simulateTemperatureEvent(int x, int y)
         //reduce bedrock amount
         //increase rock amount
         //complete!
-        //std::cout << "probability: " << probability << "\n";
+        //std::cout << "amount of bedrock existing: " << terrainLayers[posToIndex({ x, y }, TerrainLayer::BEDROCK)];
+        //std::cout << ", amount to convert: " << rockAmount << std::endl;
+        terrainLayers[posToIndex({ x, y }, TerrainLayer::DEAD_VEGETATION)] = 1.0f;
+
+
+        //UPDATE
+        terrainLayers[posToIndex({ x, y }, TerrainLayer::BEDROCK)] -= rockAmount;
+        terrainLayers[posToIndex({ x, y }, TerrainLayer::ROCK)] += rockAmount;
     }
 }
 

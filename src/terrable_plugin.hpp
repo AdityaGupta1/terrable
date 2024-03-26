@@ -36,6 +36,8 @@ private:
     int getSimTime(fpreal t) { return evalInt("sim_time", 0, t); }
     int getSeed(fpreal t) { return evalInt("seed", 0, t); }
 
+    //get sun meridian midpoint
+
     size_t posToIndex(int x, int y, TerrainLayer layer) const;
     inline size_t posToIndex(UT_Vector2i pos, TerrainLayer layer) const
     {
@@ -46,7 +48,7 @@ private:
     float calculateSlope(int x, int y) const;
     float calculateSlope(UT_Vector2i pos1, UT_Vector2i pos2) const;
     UT_Vector3F calculateNormal(int x, int y) const;
-    bool rayCast(int x, int y, UT_Vector3F rayDirection) const;
+    bool gridMarchOcclusionTest(int x, int y, UT_Vector3F rayDirection) const;
     float calculateIllumination(int x, int y) const;
 
     void setTerrainSize(int newWidth, int newHeight);
